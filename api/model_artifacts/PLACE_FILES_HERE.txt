@@ -1,0 +1,12 @@
+This folder contains the 6 trained model artifact files required by api/predict.py.
+
+Place the following files here:
+  - tfidf_vectorizer.joblib
+  - lexicon_scaler.joblib
+  - label_encoder.joblib
+  - sentiment_model.joblib
+  - financial_lexicon.json
+  - lex_cols.json
+
+These files are loaded at module level by predict.py when the serverless function cold-starts.
+DO NOT add these files to .gitignore — they must be committed to git so Vercel can access them at deploy time.
