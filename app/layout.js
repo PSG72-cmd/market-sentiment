@@ -1,4 +1,5 @@
 import "./globals.css";
+import AmbientBackground from "./components/AmbientBackground";
 
 export const metadata = {
   title: "FinSentiment — Financial Sentiment Analyzer",
@@ -20,7 +21,10 @@ export default function RootLayout({ children }) {
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <AmbientBackground />
+        {children}
+      </body>
     </html>
   );
 }
