@@ -1,5 +1,6 @@
 import "./globals.css";
 import AmbientBackground from "./components/AmbientBackground";
+import CustomCursor from "./components/CustomCursor";
 
 export const metadata = {
   title: "FinSentiment — Financial Sentiment Analyzer",
@@ -23,6 +24,7 @@ export default function RootLayout({ children }) {
       </head>
       <body>
         <AmbientBackground />
+        <CustomCursor />
         {children}
       </body>
     </html>

@@ -18,6 +18,10 @@ const StockExplorer = dynamic(() => import("./components/StockExplorer"), {
   ),
 });
 
+const CandleTransition = dynamic(() => import("./components/CandleTransition"), {
+  ssr: false,
+});
+
 // ── Fallback static data ────────────────────────────────────────────────────
 const FALLBACK_TICKER = [
   { symbol: "AAPL", price: "—", change: "—", up: true },
@@ -160,7 +164,21 @@ function AnimatedBar({ cls, value, delay, shouldReduce }) {
 // ── Main Page Component ──────────────────────────────────────────────────────
 export default function HomePage() {
   const shouldReduce = useReducedMotion();
-  const [activeTab, setActiveTab] = useState("sentiment");
+  const [activeTab, setActiveTab]           = useState("sentiment");
+  const [showTransition, setShowTransition] = useState(false);
+  const [transitionDir, setTransitionDir]   = useState("toStock");
+
+  const switchTab = (tab) => {
+    if (tab === activeTab || shouldReduce) { setActiveTab(tab); return; }
+    const dir = tab === "stock" ? "toStock" : "toSentiment";
+    setTransitionDir(dir);
+    setShowTransition(true);
+    // After candle animation plays (~550ms), switch tab and fade out overlay
+    setTimeout(() => {
+      setActiveTab(tab);
+      setTimeout(() => setShowTransition(false), 220);
+    }, 500);
+  };
 
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -358,7 +376,7 @@ export default function HomePage() {
           role="tab"
           aria-selected={activeTab === "sentiment"}
           className={`tab-btn ${activeTab === "sentiment" ? "active" : ""}`}
-          onClick={() => setActiveTab("sentiment")}
+          onClick={() => switchTab("sentiment")}
         >
           <span className="tab-btn-icon">🧠</span>
           Sentiment Analysis
@@ -368,12 +386,19 @@ export default function HomePage() {
           role="tab"
           aria-selected={activeTab === "stock"}
           className={`tab-btn ${activeTab === "stock" ? "active" : ""}`}
-          onClick={() => setActiveTab("stock")}
+          onClick={() => switchTab("stock")}
         >
           <span className="tab-btn-icon">📊</span>
           Stock Explorer
         </button>
       </div>
+
+      {/* ── Candlestick transition overlay ──────────────────────────── */}
+      <AnimatePresence>
+        {showTransition && !shouldReduce && (
+          <CandleTransition key="candle-overlay" direction={transitionDir} />
+        )}
+      </AnimatePresence>
 
       {/* ── Tab Content ───────────────────────────────────────────────── */}
       <AnimatePresence mode="wait">

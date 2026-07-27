@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { createChart, ColorType, AreaData } from "lightweight-charts";
 
 // ── Popular tickers per country (autocomplete seed + trending view) ────────
 const POPULAR = {
@@ -109,14 +108,6 @@ const RANGES = ["1D", "5D", "1M", "6M", "1Y", "5Y", "MAX"];
 const TRENDING_COUNT = 6;
 
 // ── Animation variants ─────────────────────────────────────────────────────
-const fadeUp = {
-  hidden: { opacity: 0, y: 18 },
-  visible: (i = 0) => ({
-    opacity: 1, y: 0,
-    transition: { type: "spring", stiffness: 260, damping: 24, delay: i * 0.06 },
-  }),
-};
-
 const popIn = {
   hidden: { opacity: 0, scale: 0.82 },
   visible: (i = 0) => ({
@@ -135,84 +126,98 @@ function Skeleton({ width = "100%", height = "16px", style = {} }) {
   );
 }
 
-// ── Lightweight Charts wrapper ─────────────────────────────────────────────
+// ── Lightweight Charts v5 wrapper ──────────────────────────────────────────
 function PriceChart({ history, isUp, range }) {
   const containerRef = useRef(null);
-  const chartRef = useRef(null);
-  const seriesRef = useRef(null);
+  const chartRef     = useRef(null);
 
   useEffect(() => {
     if (!containerRef.current || !history?.length) return;
 
-    // Destroy old chart if re-rendering
-    if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current = null;
-    }
+    // Lazy-import to avoid SSR issues and ensure v5 API
+    let destroyed = false;
+    (async () => {
+      try {
+        const lwc = await import("lightweight-charts");
+        if (destroyed || !containerRef.current) return;
 
-    const upColor   = "#34d399";
-    const downColor = "#fb7185";
-    const lineColor = isUp ? upColor : downColor;
+        // Destroy previous instance
+        if (chartRef.current) {
+          try { chartRef.current.remove(); } catch {}
+          chartRef.current = null;
+        }
 
-    const chart = createChart(containerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#94a3b8",
-        fontSize: 11,
-        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-      },
-      grid: {
-        vertLines: { color: "rgba(255,255,255,0.04)" },
-        horzLines: { color: "rgba(255,255,255,0.04)" },
-      },
-      crosshair: {
-        vertLine: { color: "rgba(255,255,255,0.2)", width: 1 },
-        horzLine: { color: "rgba(255,255,255,0.2)", width: 1 },
-      },
-      rightPriceScale: {
-        borderColor: "rgba(255,255,255,0.06)",
-        scaleMargins: { top: 0.1, bottom: 0.1 },
-      },
-      timeScale: {
-        borderColor: "rgba(255,255,255,0.06)",
-        timeVisible: range === "1D" || range === "5D",
-        secondsVisible: false,
-      },
-      handleScale: { axisPressedMouseMove: true },
-      width: containerRef.current.clientWidth,
-      height: 280,
-    });
+        const lineColor = isUp ? "#34d399" : "#fb7185";
 
-    const series = chart.addAreaSeries({
-      lineColor,
-      topColor:    isUp ? "rgba(52,211,153,0.18)"  : "rgba(251,113,133,0.18)",
-      bottomColor: isUp ? "rgba(52,211,153,0.01)"  : "rgba(251,113,133,0.01)",
-      lineWidth: 2,
-      priceLineVisible: true,
-      lastValueVisible: true,
-      crosshairMarkerRadius: 5,
-      crosshairMarkerBorderColor: lineColor,
-      crosshairMarkerBackgroundColor: "#121a2b",
-    });
+        const chart = lwc.createChart(containerRef.current, {
+          layout: {
+            background: { type: lwc.ColorType.Solid, color: "transparent" },
+            textColor: "#94a3b8",
+            fontSize: 11,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+          },
+          grid: {
+            vertLines: { color: "rgba(255,255,255,0.04)" },
+            horzLines: { color: "rgba(255,255,255,0.04)" },
+          },
+          crosshair: {
+            vertLine: { color: "rgba(255,255,255,0.2)", width: 1 },
+            horzLine: { color: "rgba(255,255,255,0.2)", width: 1 },
+          },
+          rightPriceScale: {
+            borderColor: "rgba(255,255,255,0.06)",
+            scaleMargins: { top: 0.1, bottom: 0.1 },
+          },
+          timeScale: {
+            borderColor: "rgba(255,255,255,0.06)",
+            timeVisible: range === "1D" || range === "5D",
+            secondsVisible: false,
+          },
+          width:  containerRef.current.clientWidth,
+          height: 280,
+        });
 
-    const chartData = history.map((h) => ({ time: h.time, value: h.close }));
-    series.setData(chartData);
-    chart.timeScale().fitContent();
+        // v5 API: addSeries(SeriesClass, options)
+        const series = chart.addSeries(lwc.AreaSeries, {
+          lineColor,
+          topColor:    isUp ? "rgba(52,211,153,0.22)"  : "rgba(251,113,133,0.22)",
+          bottomColor: isUp ? "rgba(52,211,153,0.01)"  : "rgba(251,113,133,0.01)",
+          lineWidth: 2,
+        });
 
-    chartRef.current = chart;
-    seriesRef.current = series;
+        const chartData = history.map((h) => ({
+          time:  h.time,
+          value: h.close,
+        }));
+        series.setData(chartData);
+        chart.timeScale().fitContent();
 
-    const ro = new ResizeObserver(() => {
-      if (containerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+        chartRef.current = chart;
+
+        // Responsive resize
+        const ro = new ResizeObserver(() => {
+          if (containerRef.current && chartRef.current) {
+            chartRef.current.applyOptions({
+              width: containerRef.current.clientWidth,
+            });
+          }
+        });
+        ro.observe(containerRef.current);
+
+        // Store cleanup
+        chart._ro = ro;
+      } catch (err) {
+        console.error("Chart render error:", err);
       }
-    });
-    ro.observe(containerRef.current);
+    })();
 
     return () => {
-      ro.disconnect();
+      destroyed = true;
       if (chartRef.current) {
-        chartRef.current.remove();
+        try {
+          if (chartRef.current._ro) chartRef.current._ro.disconnect();
+          chartRef.current.remove();
+        } catch {}
         chartRef.current = null;
       }
     };
@@ -231,101 +236,87 @@ function StatCell({ label, value }) {
   );
 }
 
-// ── CountUp hook ───────────────────────────────────────────────────────────
-function useCountUp(target, duration = 900, active = false) {
-  const [val, setVal] = useState(0);
-  useEffect(() => {
-    if (!active) { setVal(target); return; }
-    let start = null;
-    const step = (ts) => {
-      if (!start) start = ts;
-      const progress = Math.min((ts - start) / duration, 1);
-      const ease = 1 - Math.pow(1 - progress, 3); // cubic ease-out
-      setVal(Math.round(ease * target));
-      if (progress < 1) requestAnimationFrame(step);
-      else setVal(target);
-    };
-    requestAnimationFrame(step);
-  }, [target, active, duration]);
-  return val;
-}
-
-// ── Main StockExplorer component ───────────────────────────────────────────
+// ── Main StockExplorer ─────────────────────────────────────────────────────
 export default function StockExplorer() {
   const shouldReduce = useReducedMotion();
 
-  const [country, setCountry] = useState("US");
-  const [countryOpen, setCountryOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
+  const [country, setCountry]           = useState("US");
+  const [countryOpen, setCountryOpen]   = useState(false);
+  const [query, setQuery]               = useState("");
+  const [suggestions, setSuggestions]   = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const [selectedStock, setSelectedStock] = useState(null);
-  const [stockData, setStockData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [activeRange, setActiveRange] = useState("1M");
+  const [stockData, setStockData]         = useState(null);
+  const [loading, setLoading]             = useState(false);
+  const [error, setError]                 = useState(null);
+  const [activeRange, setActiveRange]     = useState("1M");
 
-  const [trendingData, setTrendingData] = useState({});
+  const [trendingData, setTrendingData]       = useState({});
   const [trendingLoading, setTrendingLoading] = useState(false);
 
-  const debounceRef = useRef(null);
+  const debounceRef   = useRef(null);
   const searchInputRef = useRef(null);
 
-  const countryObj = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
+  const countryObj  = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
   const popularList = POPULAR[country] || POPULAR["US"];
-  const trending = popularList.slice(0, TRENDING_COUNT);
+  const trending    = popularList.slice(0, TRENDING_COUNT);
 
-  // ── Autocomplete ─────────────────────────────────────────────────────
+  // ── Autocomplete ───────────────────────────────────────────────────────
   const handleQueryChange = (e) => {
     const q = e.target.value;
     setQuery(q);
     clearTimeout(debounceRef.current);
     if (q.trim().length < 1) { setSuggestions([]); setShowSuggestions(false); return; }
-
     debounceRef.current = setTimeout(() => {
       const lower = q.toLowerCase();
-      const matches = popularList.filter(
-        (t) =>
-          t.symbol.toLowerCase().includes(lower) ||
-          t.name.toLowerCase().includes(lower)
-      ).slice(0, 8);
+      const matches = popularList
+        .filter(
+          (t) =>
+            t.symbol.toLowerCase().includes(lower) ||
+            t.name.toLowerCase().includes(lower)
+        )
+        .slice(0, 8);
       setSuggestions(matches);
       setShowSuggestions(matches.length > 0);
     }, 300);
   };
 
-  // ── Fetch stock detail ─────────────────────────────────────────────
-  const fetchStock = useCallback(async (symbol, rangeKey = activeRange) => {
-    setLoading(true);
-    setError(null);
-    setStockData(null);
-    setSelectedStock(symbol);
-    setShowSuggestions(false);
-    setQuery("");
+  // ── Fetch stock detail ─────────────────────────────────────────────────
+  const fetchStock = useCallback(
+    async (symbol, rangeKey) => {
+      const rk = rangeKey || activeRange;
+      setLoading(true);
+      setError(null);
+      setStockData(null);
+      setSelectedStock(symbol);
+      setShowSuggestions(false);
+      setQuery("");
 
-    try {
-      const res = await fetch(
-        `/api/stock?ticker=${encodeURIComponent(symbol)}&country=${country}&range=${rangeKey}`,
-        { cache: "no-store" }
-      );
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || `Error ${res.status}`);
-      setStockData(data);
-      setActiveRange(rangeKey);
-    } catch (err) {
-      setError(err.message || "Failed to load stock data. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }, [country, activeRange]);
+      try {
+        const res = await fetch(
+          `/api/stock?ticker=${encodeURIComponent(symbol)}&country=${country}&range=${rk}`,
+          { cache: "no-store" }
+        );
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `Error ${res.status}`);
+        setStockData(data);
+        setActiveRange(rk);
+      } catch (err) {
+        setError(err.message || "Failed to load stock data. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [country, activeRange]
+  );
 
-  // ── Change range ───────────────────────────────────────────────────
+  // ── Change range ───────────────────────────────────────────────────────
   const handleRangeChange = (r) => {
     if (selectedStock) fetchStock(selectedStock, r);
   };
 
-  // ── Fetch trending preview prices ──────────────────────────────────
+  // ── Trending preview prices ────────────────────────────────────────────
   useEffect(() => {
     setTrendingData({});
     setTrendingLoading(true);
@@ -345,14 +336,18 @@ export default function StockExplorer() {
           } catch {}
         })
       );
-      if (!cancelled) { setTrendingData(results); setTrendingLoading(false); }
+      if (!cancelled) {
+        setTrendingData(results);
+        setTrendingLoading(false);
+      }
     }
 
     loadTrending();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [country]);
 
-  // ── Reset on country change ────────────────────────────────────────
+  // ── Reset on country change ────────────────────────────────────────────
   useEffect(() => {
     setSelectedStock(null);
     setStockData(null);
@@ -361,23 +356,24 @@ export default function StockExplorer() {
     setSuggestions([]);
   }, [country]);
 
-  const animProps = (variant, custom) =>
-    shouldReduce
-      ? {}
-      : { variants: variant, initial: "hidden", animate: "visible", custom };
-
   return (
     <div className="stock-explorer" style={{ position: "relative", zIndex: 1 }}>
 
       {/* ── Search row ──────────────────────────────────────────────── */}
       <motion.div
         className="stock-search-row"
-        {...(shouldReduce ? {} : { initial: { opacity: 0, y: 16 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.35 } })}
+        initial={shouldReduce ? {} : { opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35 }}
       >
         {/* Country picker */}
         <div className="country-selector" style={{ position: "relative" }}>
           {countryOpen && (
-            <div className="dropdown-overlay" onClick={() => setCountryOpen(false)} aria-hidden="true" />
+            <div
+              className="dropdown-overlay"
+              onClick={() => setCountryOpen(false)}
+              aria-hidden="true"
+            />
           )}
           <button
             id="stock-country-btn"
@@ -430,7 +426,6 @@ export default function StockExplorer() {
             autoComplete="off"
             spellCheck={false}
           />
-          {/* Autocomplete dropdown */}
           <AnimatePresence>
             {showSuggestions && (
               <motion.div
@@ -441,7 +436,7 @@ export default function StockExplorer() {
                 transition={{ duration: 0.15 }}
                 style={{ transformOrigin: "top" }}
               >
-                {suggestions.map((s, i) => (
+                {suggestions.map((s) => (
                   <button
                     key={s.symbol}
                     id={`stock-suggestion-${s.symbol}`}
@@ -458,8 +453,10 @@ export default function StockExplorer() {
         </div>
       </motion.div>
 
-      {/* ── Trending grid (when no stock selected) ────────────────────── */}
+      {/* ── Main content area ──────────────────────────────────────────── */}
       <AnimatePresence mode="wait">
+
+        {/* Trending grid */}
         {!selectedStock && !loading && (
           <motion.div
             key="trending"
@@ -474,7 +471,7 @@ export default function StockExplorer() {
             </div>
             <div className="stock-trending-grid">
               {trending.map((t, i) => {
-                const d = trendingData[t.symbol];
+                const d   = trendingData[t.symbol];
                 const isUp = d ? d.isUp : true;
                 return (
                   <motion.button
@@ -482,24 +479,28 @@ export default function StockExplorer() {
                     id={`trending-${t.symbol}`}
                     className={`stock-trending-card ${d ? (isUp ? "up" : "down") : ""}`}
                     onClick={() => fetchStock(t.symbol)}
-                    {...(shouldReduce ? {} : {
-                      variants: popIn,
-                      initial: "hidden",
-                      animate: "visible",
-                      custom: i,
-                      whileHover: { scale: 1.03, transition: { type: "spring", stiffness: 400, damping: 20 } },
-                    })}
+                    variants={popIn}
+                    initial="hidden"
+                    animate="visible"
+                    custom={i}
+                    whileHover={
+                      shouldReduce
+                        ? {}
+                        : {
+                            scale: 1.03,
+                            transition: { type: "spring", stiffness: 400, damping: 20 },
+                          }
+                    }
                   >
                     <div className="stock-trending-header">
                       <span className="stock-trending-symbol">{t.symbol}</span>
-                      {trendingLoading && !d && (
+                      {trendingLoading && !d ? (
                         <Skeleton width="48px" height="12px" />
-                      )}
-                      {d && (
+                      ) : d ? (
                         <span className={`stock-trending-change ${isUp ? "up" : "down"}`}>
                           {isUp ? "▲" : "▼"} {d.changePct}%
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     <div className="stock-trending-name">{t.name}</div>
                     {d ? (
@@ -514,7 +515,7 @@ export default function StockExplorer() {
           </motion.div>
         )}
 
-        {/* ── Loading state ──────────────────────────────────────────── */}
+        {/* Loading state */}
         {loading && (
           <motion.div
             key="loading"
@@ -540,12 +541,16 @@ export default function StockExplorer() {
                   </div>
                 ))}
               </div>
-              <Skeleton width="100%" height="280px" style={{ marginTop: 16, borderRadius: 12 }} />
+              <Skeleton
+                width="100%"
+                height="280px"
+                style={{ marginTop: 16, borderRadius: 12 }}
+              />
             </div>
           </motion.div>
         )}
 
-        {/* ── Error state ────────────────────────────────────────────── */}
+        {/* Error state */}
         {error && !loading && (
           <motion.div
             key="error"
@@ -566,7 +571,7 @@ export default function StockExplorer() {
           </motion.div>
         )}
 
-        {/* ── Stock detail ───────────────────────────────────────────── */}
+        {/* Stock detail */}
         {stockData && !loading && (
           <motion.div
             key={`stock-${selectedStock}-${activeRange}`}
@@ -575,7 +580,6 @@ export default function StockExplorer() {
             exit={{ opacity: 0, y: -16 }}
             transition={{ type: "spring", stiffness: 240, damping: 26 }}
           >
-            {/* Back button */}
             <button
               className="stock-back-btn"
               onClick={() => { setSelectedStock(null); setStockData(null); setError(null); }}
@@ -594,8 +598,11 @@ export default function StockExplorer() {
                     {stockData.price}
                   </span>
                   <span className={`stock-quote-change ${stockData.isUp ? "up" : "down"}`}>
-                    {stockData.isUp ? "▲" : "▼"} {stockData.isUp ? "+" : ""}{stockData.change}{" "}
-                    ({stockData.isUp ? "+" : ""}{stockData.changePct}%)
+                    {stockData.isUp ? "▲" : "▼"}{" "}
+                    {stockData.isUp ? "+" : ""}
+                    {stockData.change}{" "}
+                    ({stockData.isUp ? "+" : ""}
+                    {stockData.changePct}%)
                   </span>
                 </div>
               </div>
@@ -606,14 +613,14 @@ export default function StockExplorer() {
 
             {/* Stats grid */}
             <div className="stock-stats-grid">
-              <StatCell label="Open"          value={stockData.open} />
-              <StatCell label="Day High"      value={stockData.high} />
-              <StatCell label="Day Low"       value={stockData.low} />
-              <StatCell label="Prev. Close"   value={stockData.prevClose} />
-              <StatCell label="Volume"        value={stockData.volume} />
-              <StatCell label="Market Cap"    value={stockData.marketCap} />
-              <StatCell label="52W High"      value={stockData.week52High} />
-              <StatCell label="52W Low"       value={stockData.week52Low} />
+              <StatCell label="Open"        value={stockData.open} />
+              <StatCell label="Day High"    value={stockData.high} />
+              <StatCell label="Day Low"     value={stockData.low} />
+              <StatCell label="Prev. Close" value={stockData.prevClose} />
+              <StatCell label="Volume"      value={stockData.volume} />
+              <StatCell label="Market Cap"  value={stockData.marketCap} />
+              <StatCell label="52W High"    value={stockData.week52High} />
+              <StatCell label="52W Low"     value={stockData.week52Low} />
             </div>
 
             {/* Range selector */}
@@ -630,7 +637,7 @@ export default function StockExplorer() {
               ))}
             </div>
 
-            {/* Chart */}
+            {/* Chart — wrapped in error boundary via try-catch in PriceChart */}
             <div className="stock-chart-card">
               {stockData.history?.length > 0 ? (
                 <PriceChart
@@ -639,11 +646,14 @@ export default function StockExplorer() {
                   range={activeRange}
                 />
               ) : (
-                <div className="stock-chart-empty">No chart data available for this range.</div>
+                <div className="stock-chart-empty">
+                  No chart data available for this range.
+                </div>
               )}
             </div>
           </motion.div>
         )}
+
       </AnimatePresence>
     </div>
   );
