@@ -320,10 +320,14 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
         className="draw-svg"
         width={dims.w}
         height={dims.h}
-        style={{ pointerEvents: activeTool ? "all" : "none" }}
-        onMouseDown={activeTool !== "eraser" && activeTool !== "marker" && activeTool !== "hline" ? handleMouseDown : undefined}
-        onMouseMove={inProgress ? handleMouseMove : undefined}
-        onMouseUp={inProgress ? handleMouseUp : undefined}
+        style={{
+          pointerEvents: activeTool ? "all" : "none",
+          touchAction: activeTool ? "none" : "auto"
+        }}
+        onPointerDown={activeTool !== "eraser" && activeTool !== "marker" && activeTool !== "hline" ? handleMouseDown : undefined}
+        onPointerMove={inProgress ? handleMouseMove : undefined}
+        onPointerUp={inProgress ? handleMouseUp : undefined}
+        onPointerCancel={inProgress ? handleMouseUp : undefined}
         onClick={activeTool === "marker" || activeTool === "hline" ? handleClick : undefined}
       >
         {drawings.map((dr) => renderDrawing(dr))}
