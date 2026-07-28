@@ -1916,8 +1916,7 @@ textarea::placeholder {
 
 /* ── Mobile responsive (375px / 428px) ─────────────────────────────────── */
 @media (max-width: 640px) {
-  /* Hide drawing toolbar on mobile — view-only candlestick mode */
-  .draw-toolbar { display: none; }
+  /* Show drawing toolbar on mobile per user request */
 
   /* Stock controls row — stack */
   .stock-controls-row {
