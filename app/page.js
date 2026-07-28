@@ -7,6 +7,7 @@ import {
   useReducedMotion,
 } from "framer-motion";
 import dynamic from "next/dynamic";
+import { appendHistory } from "./components/HistoryPanel";
 
 // Lazy-load StockExplorer so lightweight-charts only loads on demand
 const StockExplorer = dynamic(() => import("./components/StockExplorer"), {
@@ -21,6 +22,15 @@ const StockExplorer = dynamic(() => import("./components/StockExplorer"), {
 const CandleTransition = dynamic(() => import("./components/CandleTransition"), {
   ssr: false,
 });
+
+const OnboardingOverlay = dynamic(() => import("./components/OnboardingOverlay"), {
+  ssr: false,
+});
+
+const HistoryPanel = dynamic(() => import("./components/HistoryPanel"), {
+  ssr: false,
+});
+
 
 // ── Fallback static data ────────────────────────────────────────────────────
 const FALLBACK_TICKER = [
@@ -180,6 +190,26 @@ export default function HomePage() {
     }, 500);
   };
 
+  // ── Onboarding state ────────────────────────────────────────────────────
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!localStorage.getItem("hasSeenOnboarding")) setShowOnboarding(true);
+  }, []);
+  const dismissOnboarding = () => {
+    localStorage.setItem("hasSeenOnboarding", "1");
+    setShowOnboarding(false);
+  };
+
+  // ── Batch mode state ─────────────────────────────────────────────────────
+  const [mode, setMode]             = useState("single"); // "single" | "batch"
+  const [batchText, setBatchText]   = useState("");
+  const [batchResults, setBatchResults] = useState([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  // ── Result export ref ────────────────────────────────────────────────────
+  const resultCardRef = useRef(null);
+
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -238,6 +268,16 @@ export default function HomePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
       setResult(data);
+      // Append to localStorage history
+      try {
+        const conf = data.probabilities?.[data.sentiment];
+        appendHistory({
+          text: trimmed,
+          sentiment: data.sentiment,
+          confidence: conf != null ? Math.round(conf * 1000) / 10 : 0,
+        });
+        window.dispatchEvent(new Event("sentiment-history-updated"));
+      } catch {}
     } catch (err) {
       setError(err.message || "Unknown error. Please try again.");
     } finally {
@@ -249,6 +289,64 @@ export default function HomePage() {
     setText(example.text);
     analyze(example.text);
   }, [analyze]);
+
+  // ── Batch analyze handler ─────────────────────────────────────────────────
+  const analyzeBatch = useCallback(async () => {
+    const lines = batchText.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+    if (lines.length > 50) { alert("Maximum 50 headlines per batch. Please trim your input."); return; }
+    setBatchLoading(true);
+    setBatchResults([]);
+    try {
+      const res  = await fetch("/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texts: lines }),
+      });
+      const data = await res.json();
+      const scores = data.scores || [];
+      setBatchResults(lines.map((line, i) => ({
+        text: line,
+        sentiment:  scores[i]?.sentiment  || "neutral",
+        confidence: scores[i]?.confidence || 0,
+      })));
+    } catch {
+      alert("Batch scoring failed. Please try again.");
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [batchText]);
+
+  // ── CSV download ──────────────────────────────────────────────────────────
+  const downloadCSV = () => {
+    if (!batchResults.length) return;
+    const header = "Headline,Sentiment,Confidence %";
+    const rows   = batchResults.map((r) =>
+      `"${r.text.replace(/"/g, '""')}",${r.sentiment},${r.confidence.toFixed(1)}`
+    );
+    const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "sentiment-batch.csv";
+    a.click();
+  };
+
+  // ── Export result card ────────────────────────────────────────────────────
+  const exportResultCard = async () => {
+    if (!resultCardRef.current) return;
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(resultCardRef.current, { backgroundColor: "#0a0f1c", pixelRatio: 2 });
+      try {
+        const blob = await (await fetch(dataUrl)).blob();
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        alert("✓ Copied to clipboard!");
+      } catch {
+        const a = document.createElement("a");
+        a.href = dataUrl; a.download = "sentiment-result.png"; a.click();
+      }
+    } catch { alert("Export failed. Please try again."); }
+  };
 
   const charClass =
     text.length > MAX_CHARS ? "error" : text.length > MAX_CHARS * 0.85 ? "warn" : "";
@@ -307,6 +405,13 @@ export default function HomePage() {
 
   return (
     <>
+      {/* ── Onboarding overlay (first visit only) ──────────────── */}
+      <AnimatePresence>
+        {showOnboarding && (
+          <OnboardingOverlay key="onboarding" onDismiss={dismissOnboarding} />
+        )}
+      </AnimatePresence>
+
       {/* ── Ticker Tape ─────────────────────────────────────────────────── */}
       <div className="ticker-wrapper" aria-label="Live market prices">
         <span style={{
@@ -476,6 +581,24 @@ export default function HomePage() {
                 </motion.div>
               </section>
 
+              {/* ── Mode toggle: Single | Batch ──────────────────── */}
+              <div className="mode-toggle" role="group" aria-label="Analysis mode">
+                <button
+                  id="mode-single"
+                  className={`mode-btn ${mode === "single" ? "active" : ""}`}
+                  onClick={() => { setMode("single"); setBatchResults([]); }}
+                >
+                  Single
+                </button>
+                <button
+                  id="mode-batch"
+                  className={`mode-btn ${mode === "batch" ? "active" : ""}`}
+                  onClick={() => setMode("batch")}
+                >
+                  Batch
+                </button>
+              </div>
+
               {/* ── Input Card ────────────────────────────────────── */}
               <motion.div
                 className="input-card"
@@ -491,15 +614,26 @@ export default function HomePage() {
                   </span>
                 </div>
 
-                <textarea
-                  id="sentiment-input"
-                  rows={4}
-                  value={text}
-                  maxLength={MAX_CHARS}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder="Enter a financial headline, earnings report excerpt, or market commentary…"
-                  aria-label="Financial text to analyze"
-                />
+                {mode === "single" ? (
+                  <textarea
+                    id="sentiment-input"
+                    rows={4}
+                    value={text}
+                    maxLength={MAX_CHARS}
+                    onChange={(e) => setText(e.target.value)}
+                    placeholder="Enter a financial headline, earnings report excerpt, or market commentary…"
+                    aria-label="Financial text to analyze"
+                  />
+                ) : (
+                  <textarea
+                    id="batch-input"
+                    rows={8}
+                    value={batchText}
+                    onChange={(e) => setBatchText(e.target.value)}
+                    placeholder={`Paste multiple headlines — one per line (max 50):\n\nApple reports record quarterly revenue…\nFed signals rate hike amid inflation…\nCompany files for bankruptcy protection…`}
+                    aria-label="Batch headlines to analyze"
+                  />
+                )}
 
                 {/* ── Example Chips ─────────────────────────────── */}
                 <div className="chips-section">
@@ -533,10 +667,14 @@ export default function HomePage() {
                 {/* ── Analyze Button ────────────────────────────── */}
                 <motion.button
                   id="analyze-btn"
-                  className={`analyze-btn ${loading ? "loading" : ""}`}
-                  onClick={() => analyze()}
-                  disabled={loading || !text.trim()}
-                  aria-label="Analyze sentiment"
+                  className={`analyze-btn ${loading || batchLoading ? "loading" : ""}`}
+                  onClick={() => mode === "batch" ? analyzeBatch() : analyze()}
+                  disabled={
+                    mode === "single"
+                      ? (loading || !text.trim())
+                      : (batchLoading || !batchText.trim())
+                  }
+                  aria-label={mode === "batch" ? "Analyze batch headlines" : "Analyze sentiment"}
                   animate={
                     ripple && !shouldReduce
                       ? { scale: [1, 0.97, 1.02, 1] }
@@ -544,10 +682,12 @@ export default function HomePage() {
                   }
                   transition={{ duration: 0.35 }}
                 >
-                  {loading ? (
+                  {loading || batchLoading ? (
                     <span className="dot-pulse" aria-label="Analyzing">
                       Analyzing <span /><span /><span />
                     </span>
+                  ) : mode === "batch" ? (
+                    <>⚡ Analyze Batch</>
                   ) : (
                     <>⚡ Analyze Sentiment</>
                   )}
@@ -571,10 +711,13 @@ export default function HomePage() {
                 </AnimatePresence>
               </motion.div>
 
+              {/* ── Analyze / Batch Analyze Button section is below */}
+
               {/* ── Result Card ───────────────────────────────────── */}
               <AnimatePresence>
-                {result && sentiment && (
+                {result && sentiment && mode === "single" && (
                   <motion.div
+                    ref={resultCardRef}
                     className="result-card"
                     id="result-card"
                     aria-live="polite"
@@ -592,9 +735,19 @@ export default function HomePage() {
                           {sentiment}
                         </span>
                       </div>
-                      <span className={`result-confidence-badge ${sentiment}`}>
-                        {toPercent(probabilities[sentiment] ?? 0)} confidence
-                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className={`result-confidence-badge ${sentiment}`}>
+                          {toPercent(probabilities[sentiment] ?? 0)} confidence
+                        </span>
+                        <button
+                          className="export-btn"
+                          onClick={exportResultCard}
+                          title="Export result as image"
+                          aria-label="Export result as image"
+                        >
+                          ⬇ Export
+                        </button>
+                      </div>
                     </div>
 
                     {/* Probability Bars — animated count-up + staggered */}
@@ -643,6 +796,36 @@ export default function HomePage() {
                   </motion.div>
                 )}
               </AnimatePresence>
+
+
+              {/* ── Batch results table ──────────────────────────── */}
+              {mode === "batch" && batchResults.length > 0 && (
+                <div className="batch-results">
+                  <div className="batch-results-header">
+                    <span>Batch Results ({batchResults.length} headlines)</span>
+                    <button className="batch-csv-btn" onClick={downloadCSV}>⬇ Download CSV</button>
+                  </div>
+                  <div className="batch-table-wrap">
+                    <table className="batch-table">
+                      <thead>
+                        <tr><th>Headline</th><th>Sentiment</th><th>Confidence</th></tr>
+                      </thead>
+                      <tbody>
+                        {batchResults.map((r, i) => (
+                          <tr key={i}>
+                            <td className="batch-text">{r.text.length > 80 ? r.text.slice(0, 80) + "…" : r.text}</td>
+                            <td><span className={`result-confidence-badge ${r.sentiment}`}>{r.sentiment}</span></td>
+                            <td className="batch-conf">{r.confidence.toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ── History Panel ────────────────────────────────── */}
+              <HistoryPanel />
             </main>
 
             {/* ── Footer ──────────────────────────────────────────── */}

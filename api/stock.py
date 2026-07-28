@@ -1,19 +1,23 @@
 """
 api/stock.py — Vercel Python serverless function
+
 GET /api/stock?ticker=AAPL&country=US&range=1M
+GET /api/stock?action=search&q=apple&country=US
 
 Returns live stock data via yfinance (no API key needed).
 Completely separate from api/predict.py — no shared state or imports.
 """
 
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote as urlquote
 import json
 import time
+import urllib.request
 
 # ── In-memory cache (resets on cold start, acceptable for Vercel) ──────────
 _CACHE: dict = {}
-_CACHE_TTL = 60  # seconds
+_CACHE_TTL = 60        # seconds for quote/history data
+_SEARCH_TTL = 60       # seconds for search results
 
 # ── Country → yfinance ticker suffix ──────────────────────────────────────
 COUNTRY_SUFFIX = {
@@ -39,9 +43,10 @@ RANGE_PARAMS = {
 }
 
 
-def _get_cached(key):
+def _get_cached(key, ttl=None):
     entry = _CACHE.get(key)
-    if entry and (time.time() - entry["ts"]) < _CACHE_TTL:
+    effective_ttl = ttl if ttl is not None else _CACHE_TTL
+    if entry and (time.time() - entry["ts"]) < effective_ttl:
         return entry["data"]
     return None
 
@@ -90,6 +95,78 @@ def _safe(val, fmt=".2f"):
         return "—"
 
 
+# ── Search endpoint ────────────────────────────────────────────────────────
+
+def search_tickers(query: str, country: str) -> list:
+    """
+    Query Yahoo Finance's public search API and return a clean list of
+    {symbol, name, exchange} dicts, prioritising results matching the
+    country's suffix convention.
+    """
+    cache_key = f"search:{query.lower().strip()}:{country}"
+    cached = _get_cached(cache_key, ttl=_SEARCH_TTL)
+    if cached is not None:
+        return cached
+
+    url = (
+        "https://query2.finance.yahoo.com/v1/finance/search"
+        f"?q={urlquote(query)}&quotesCount=12&newsCount=0"
+        "&enableFuzzyQuery=false&lang=en-US&region=US"
+    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        _set_cache(cache_key, [])
+        return []
+
+    quotes = data.get("quotes", [])
+    suffix = COUNTRY_SUFFIX.get(country, "")
+
+    priority = []
+    secondary = []
+
+    for q in quotes:
+        symbol = (q.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        name = q.get("longname") or q.get("shortname") or symbol
+        exchange = q.get("exchDisp") or q.get("exchange") or ""
+        q_type = q.get("quoteType", "")
+
+        # Skip mutual funds, indices, currencies unless explicitly searched
+        if q_type in ("MUTUALFUND", "INDEX", "CURRENCY"):
+            continue
+
+        item = {"symbol": symbol, "name": name, "exchange": exchange}
+
+        # Priority: matches the selected country's suffix
+        if suffix and symbol.endswith(suffix):
+            priority.append(item)
+        elif not suffix and "." not in symbol:
+            # US stocks (no suffix) → priority when US selected
+            priority.append(item)
+        else:
+            secondary.append(item)
+
+    results = (priority + secondary)[:10]
+    _set_cache(cache_key, results)
+    return results
+
+
+# ── Stock data endpoint ────────────────────────────────────────────────────
+
 def fetch_stock_data(ticker_symbol: str, range_key: str) -> dict:
     """Fetch data from yfinance and return a clean JSON-serialisable dict."""
     import yfinance as yf  # import here so cold-start errors are surfaced cleanly
@@ -108,25 +185,27 @@ def fetch_stock_data(ticker_symbol: str, range_key: str) -> dict:
         raise ValueError(f"No data found for ticker '{ticker_symbol}'. "
                          "Check the symbol and selected country/exchange.")
 
-    # ── Build history array ──────────────────────────────────────────────
+    # ── Build history array (full OHLC + volume) ─────────────────────────
     history = []
     for ts, row in hist.iterrows():
         try:
-            close_val = float(row["Close"])
-            open_val  = float(row["Open"])
-            high_val  = float(row["High"])
-            low_val   = float(row["Low"])
+            close_val  = float(row["Close"])
+            open_val   = float(row["Open"])
+            high_val   = float(row["High"])
+            low_val    = float(row["Low"])
+            volume_val = int(row.get("Volume", 0) or 0)
             # lightweight-charts expects Unix seconds for time
             if hasattr(ts, "timestamp"):
                 t = int(ts.timestamp())
             else:
                 t = int(ts)
             history.append({
-                "time":  t,
-                "close": round(close_val, 4),
-                "open":  round(open_val, 4),
-                "high":  round(high_val, 4),
-                "low":   round(low_val, 4),
+                "time":   t,
+                "open":   round(open_val,  4),
+                "high":   round(high_val,  4),
+                "low":    round(low_val,   4),
+                "close":  round(close_val, 4),
+                "volume": volume_val,
             })
         except Exception:
             continue
@@ -191,9 +270,31 @@ def fetch_stock_data(ticker_symbol: str, range_key: str) -> dict:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        parsed  = urlparse(self.path)
-        params  = parse_qs(parsed.query)
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
 
+        action = (params.get("action", [""])[0]).strip().lower()
+
+        # ── Search action ────────────────────────────────────────────────
+        if action == "search":
+            query   = (params.get("q",       [""])[0]).strip()
+            country = (params.get("country", ["US"])[0]).strip().upper()
+
+            if not query:
+                self._send(400, {"error": "Missing required parameter: q"})
+                return
+            if len(query) < 1 or len(query) > 80:
+                self._send(400, {"error": "Query must be 1–80 characters."})
+                return
+
+            try:
+                results = search_tickers(query, country)
+                self._send(200, {"results": results})
+            except Exception:
+                self._send(200, {"results": []})
+            return
+
+        # ── Quote + history action (default) ─────────────────────────────
         raw_ticker = (params.get("ticker", [""])[0]).strip().upper()
         country    = (params.get("country", ["US"])[0]).strip().upper()
         range_key  = (params.get("range",   ["1M"])[0]).strip().upper()
@@ -204,7 +305,6 @@ class handler(BaseHTTPRequestHandler):
 
         # Build the full yfinance symbol by appending country suffix
         suffix = COUNTRY_SUFFIX.get(country, "")
-        # Don't double-append if user already typed the suffix
         if suffix and not raw_ticker.endswith(suffix):
             full_symbol = raw_ticker + suffix
         else:
@@ -219,7 +319,6 @@ class handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send(404, {"error": str(exc)})
         except Exception as exc:
-            # Never expose raw tracebacks
             msg = str(exc)
             if "No data" in msg or "symbol" in msg.lower():
                 self._send(404, {"error": f"Ticker '{full_symbol}' not found or has no data."})

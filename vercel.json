@@ -7,6 +7,10 @@
     "api/stock.py": {
       "memory": 512,
       "maxDuration": 20
+    },
+    "api/news.py": {
+      "memory": 512,
+      "maxDuration": 15
     }
   }
 }
