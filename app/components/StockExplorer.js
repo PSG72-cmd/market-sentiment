@@ -863,7 +863,7 @@ export default function StockExplorer() {
             <span className="country-btn-chevron">▼</span>
           </button>
           {countryOpen && (
-            <div className="country-dropdown" role="listbox">
+            <div className="country-dropdown" role="listbox" style={{ left: 0, right: "auto" }}>
               <div className="country-dropdown-header">Select Exchange</div>
               {COUNTRIES.map((c) => (
                 <button
