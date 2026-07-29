@@ -133,29 +133,35 @@ function StatCell({ label, value }) {
 }
 
 // ── Drawing Toolbar + SVG overlay ──────────────────────────────────────────
-function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
-  const svgRef        = useRef(null);
-  const containerRef  = useRef(null);
-  const [activeTool, setActiveTool]   = useState(null);
-  const [drawings, setDrawings]       = useState([]);
-  const [inProgress, setInProgress]   = useState(null); // {type, pts[]}
-  const [dims, setDims]               = useState({ w: 0, h: 0 });
+// Key design decisions:
+// 1. SVG fills chart card via position:absolute (no resize observer on chart internals)
+// 2. Pointer events (works on mouse + touch natively)
+// 3. Fallback pixel-only storage when chart refs not ready yet
+// 4. Works on BOTH line and candle chart types
+function DrawingLayer({ chartRef, seriesRef, containerRef: chartContainerRef, onClearConfirm }) {
+  const svgRef       = useRef(null);
+  const [activeTool, setActiveTool] = useState(null);
+  const [drawings, setDrawings]     = useState([]);
+  const [inProgress, setInProgress] = useState(null);
+  const [dims, setDims]             = useState({ w: 0, h: 0 });
 
-  // Keep SVG sized to chart container
+  // Measure the chart container to size the SVG
   useEffect(() => {
-    const el = chartRef.current?._container || svgRef.current?.parentElement;
+    const el = chartContainerRef?.current;
     if (!el) return;
+    // Initial size
+    setDims({ w: el.clientWidth, h: el.clientHeight });
     const ro = new ResizeObserver(([entry]) => {
       setDims({ w: entry.contentRect.width, h: entry.contentRect.height });
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [chartRef]);
+  }, [chartContainerRef]);
 
-  // Convert pixel → { time, price }
+  // pixel → chart data coords (best-effort — gracefully degrades to px-only)
   const pxToData = useCallback((x, y) => {
-    const chart  = chartRef.current;
-    const series = seriesRef.current;
+    const chart  = chartRef?.current;
+    const series = seriesRef?.current;
     if (!chart || !series) return null;
     try {
       const time  = chart.timeScale().coordinateToTime(x);
@@ -165,60 +171,72 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
     } catch { return null; }
   }, [chartRef, seriesRef]);
 
-  // Convert { time, price } → pixel
-  const dataToPixel = useCallback(({ time, price }) => {
-    const chart  = chartRef.current;
-    const series = seriesRef.current;
+  // data coords → pixel (used for rendering stored drawings)
+  const dataToPixel = useCallback(({ time, price, px }) => {
+    // If we stored px-only (chart wasn't ready), use those directly
+    if (px) return px;
+    const chart  = chartRef?.current;
+    const series = seriesRef?.current;
     if (!chart || !series) return { x: 0, y: 0 };
     try {
-      const x = chart.timeScale().timeToCoordinate(time) || 0;
-      const y = series.priceToCoordinate(price) || 0;
-      return { x, y };
+      const x = chart.timeScale().timeToCoordinate(time);
+      const y = series.priceToCoordinate(price);
+      return { x: x ?? 0, y: y ?? 0 };
     } catch { return { x: 0, y: 0 }; }
   }, [chartRef, seriesRef]);
 
+  // Get click/touch position relative to SVG
   const getSVGPoint = (e) => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    // pointer events give clientX/Y for both mouse and touch
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    return { x: clientX - rect.left, y: clientY - rect.top };
   };
 
-  const handleMouseDown = (e) => {
+  const handlePointerDown = (e) => {
     if (!activeTool || activeTool === "eraser") return;
+    // marker and hline are handled by click, not drag
+    if (activeTool === "marker" || activeTool === "hline") return;
     e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
     const pt = getSVGPoint(e);
     const dp = pxToData(pt.x, pt.y);
-    if (!dp) return;
-    setInProgress({ type: activeTool, start: dp, startPx: pt, endPx: pt, end: dp });
+    // Store data coords if available, fall back to pixel-only
+    const startPoint = dp || { px: pt };
+    setInProgress({ type: activeTool, start: startPoint, end: startPoint, startPx: pt, endPx: pt });
   };
 
-  const handleMouseMove = (e) => {
+  const handlePointerMove = (e) => {
     if (!inProgress) return;
     const pt = getSVGPoint(e);
     const dp = pxToData(pt.x, pt.y);
-    setInProgress((prev) => ({ ...prev, endPx: pt, end: dp || prev.end }));
+    const endPoint = dp || { px: pt };
+    setInProgress((prev) => ({ ...prev, end: endPoint, endPx: pt }));
   };
 
-  const handleMouseUp = (e) => {
+  const handlePointerUp = (e) => {
     if (!inProgress) return;
     const pt = getSVGPoint(e);
     const dp = pxToData(pt.x, pt.y);
-    const end = dp || inProgress.end;
-    const newDrawing = { id: Date.now(), type: inProgress.type, start: inProgress.start, end };
-    setDrawings((d) => [...d, newDrawing]);
+    const endPoint = dp || { px: pt };
+    // Only save if the user actually dragged (not just a tap)
+    const dist = Math.hypot(pt.x - inProgress.startPx.x, pt.y - inProgress.startPx.y);
+    if (dist > 4) {
+      setDrawings((d) => [...d, { id: Date.now(), type: inProgress.type, start: inProgress.start, end: endPoint }]);
+    }
     setInProgress(null);
   };
 
   const handleClick = (e) => {
-    if (!activeTool) return;
-    if (activeTool === "eraser") return; // eraser handled on SVG elements
-    // marker: single click
+    if (!activeTool || activeTool === "eraser") return;
     if (activeTool === "marker" || activeTool === "hline") {
       const pt = getSVGPoint(e);
       const dp = pxToData(pt.x, pt.y);
-      if (!dp) return;
-      setDrawings((d) => [...d, { id: Date.now(), type: activeTool, start: dp, end: dp }]);
+      const point = dp || { px: pt };
+      setDrawings((d) => [...d, { id: Date.now(), type: activeTool, start: point, end: point }]);
     }
   };
 
@@ -234,28 +252,41 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
     }
   };
 
-  // Expose clear method to parent
   useEffect(() => {
     if (onClearConfirm) onClearConfirm.current = clearAll;
   });
 
+  // Render a drawing, resolving coordinates from data or fallback pixels
   const renderDrawing = (dr, preview = false) => {
-    const s = dataToPixel(dr.start);
-    const e = dataToPixel(dr.end);
-    const key = dr.id || "preview";
+    // Resolve start/end to pixel coordinates
+    const resolvePoint = (point) => {
+      if (!point) return { x: 0, y: 0 };
+      if (point.px) return point.px; // pixel-only fallback
+      return dataToPixel(point);
+    };
+    const s = resolvePoint(dr.start);
+    const e = resolvePoint(dr.end);
+    const key = dr.id ?? "preview";
+    const erasable = activeTool === "eraser" ? "draw-erasable" : "";
 
     switch (dr.type) {
       case "trendline":
         return (
           <line key={key} x1={s.x} y1={s.y} x2={e.x} y2={e.y}
-            stroke="#34d399" strokeWidth={preview ? 1.5 : 2} strokeDasharray={preview ? "4 3" : undefined}
-            strokeLinecap="round" onClick={() => eraseDrawing(dr.id)} className={activeTool === "eraser" ? "draw-erasable" : ""} />
+            stroke="#34d399" strokeWidth={preview ? 1.5 : 2}
+            strokeDasharray={preview ? "5 3" : undefined}
+            strokeLinecap="round"
+            className={erasable}
+            onClick={() => eraseDrawing(dr.id)} />
         );
       case "hline":
         return (
           <line key={key} x1={0} y1={s.y} x2={dims.w} y2={s.y}
-            stroke="#fbbf24" strokeWidth={preview ? 1 : 1.5} strokeDasharray="6 3"
-            strokeLinecap="round" onClick={() => eraseDrawing(dr.id)} className={activeTool === "eraser" ? "draw-erasable" : ""} />
+            stroke="#fbbf24" strokeWidth={preview ? 1 : 1.5}
+            strokeDasharray="6 3"
+            strokeLinecap="round"
+            className={erasable}
+            onClick={() => eraseDrawing(dr.id)} />
         );
       case "arrow": {
         const dx = e.x - s.x, dy = e.y - s.y;
@@ -265,17 +296,18 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
         const ax1 = e.x - hl * ux - hw * uy, ay1 = e.y - hl * uy + hw * ux;
         const ax2 = e.x - hl * ux + hw * uy, ay2 = e.y - hl * uy - hw * ux;
         return (
-          <g key={key} onClick={() => eraseDrawing(dr.id)} className={activeTool === "eraser" ? "draw-erasable" : ""}>
-            <line x1={s.x} y1={s.y} x2={e.x} y2={e.y} stroke="#a78bfa" strokeWidth={preview ? 1.5 : 2} strokeLinecap="round" />
+          <g key={key} className={erasable} onClick={() => eraseDrawing(dr.id)}>
+            <line x1={s.x} y1={s.y} x2={e.x} y2={e.y}
+              stroke="#a78bfa" strokeWidth={preview ? 1.5 : 2} strokeLinecap="round" />
             <polygon points={`${e.x},${e.y} ${ax1},${ay1} ${ax2},${ay2}`} fill="#a78bfa" />
           </g>
         );
       }
       case "marker":
         return (
-          <g key={key} onClick={() => eraseDrawing(dr.id)} className={activeTool === "eraser" ? "draw-erasable" : ""}>
-            <circle cx={s.x} cy={s.y} r={7} fill="rgba(52,211,153,0.25)" stroke="#34d399" strokeWidth={2} />
-            <circle cx={s.x} cy={s.y} r={3} fill="#34d399" />
+          <g key={key} className={erasable} onClick={() => eraseDrawing(dr.id)}>
+            <circle cx={s.x} cy={s.y} r={8} fill="rgba(52,211,153,0.2)" stroke="#34d399" strokeWidth={2} />
+            <circle cx={s.x} cy={s.y} r={3.5} fill="#34d399" />
           </g>
         );
       default:
@@ -283,12 +315,20 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
     }
   };
 
-  if (!isActive) return null;
-
   return (
-    <div className="draw-layer" ref={containerRef}>
-      {/* Toolbar */}
-      <div className="draw-toolbar" role="toolbar" aria-label="Drawing tools">
+    <div
+      className="draw-layer"
+      style={{
+        position: "absolute",
+        top: 0, left: 0,
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        zIndex: 10,
+      }}
+    >
+      {/* Toolbar — always pointer-events: all */}
+      <div className="draw-toolbar" role="toolbar" aria-label="Drawing tools" style={{ pointerEvents: "all" }}>
         {DRAW_TOOLS.map((tool) => (
           <button
             key={tool.id}
@@ -314,34 +354,43 @@ function DrawingLayer({ chartRef, seriesRef, isActive, onClearConfirm }) {
         </button>
       </div>
 
-      {/* SVG overlay */}
+      {/* SVG drawing canvas — pointer events only when a tool is selected */}
       <svg
         ref={svgRef}
-        className="draw-svg"
-        width={dims.w}
-        height={dims.h}
         style={{
+          position: "absolute",
+          top: 0, left: 0,
+          width: dims.w || "100%",
+          height: dims.h || "100%",
           pointerEvents: activeTool ? "all" : "none",
-          touchAction: activeTool ? "none" : "auto"
+          touchAction: activeTool ? "none" : "auto",
+          cursor: activeTool === "eraser" ? "not-allowed"
+               : activeTool ? "crosshair"
+               : "default",
         }}
-        onPointerDown={activeTool !== "eraser" && activeTool !== "marker" && activeTool !== "hline" ? handleMouseDown : undefined}
-        onPointerMove={inProgress ? handleMouseMove : undefined}
-        onPointerUp={inProgress ? handleMouseUp : undefined}
-        onPointerCancel={inProgress ? handleMouseUp : undefined}
-        onClick={activeTool === "marker" || activeTool === "hline" ? handleClick : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onClick={handleClick}
       >
         {drawings.map((dr) => renderDrawing(dr))}
-        {inProgress && renderDrawing({ ...inProgress, end: inProgress.end, id: "preview" }, true)}
+        {inProgress && renderDrawing({ ...inProgress, id: "preview" }, true)}
       </svg>
     </div>
   );
 }
 
 // ── Price chart (line + candlestick, v5 API) ───────────────────────────────
-function PriceChart({ history, isUp, range, chartType, chartRef: extChartRef, seriesRef: extSeriesRef }) {
-  const containerRef = useRef(null);
-  const internalChartRef  = extChartRef  || useRef(null);
-  const internalSeriesRef = extSeriesRef || useRef(null);
+function PriceChart({ history, isUp, range, chartType, chartRef: extChartRef, seriesRef: extSeriesRef, onContainerReady }) {
+  const containerRef      = useRef(null);
+  const internalChartRef  = extChartRef  ?? useRef(null);
+  const internalSeriesRef = extSeriesRef ?? useRef(null);
+
+  // Expose container ref to parent (so DrawingLayer can measure it)
+  useEffect(() => {
+    if (onContainerReady) onContainerReady(containerRef);
+  }, [onContainerReady]);
 
   useEffect(() => {
     if (!containerRef.current || !history?.length) return;
@@ -445,9 +494,7 @@ function PriceChart({ history, isUp, range, chartType, chartRef: extChartRef, se
   }, [history, isUp, range, chartType]);
 
   return (
-    <div style={{ position: "relative" }}>
-      <div ref={containerRef} className="stock-chart-container" />
-    </div>
+    <div ref={containerRef} className="stock-chart-container" />
   );
 }
 
@@ -671,12 +718,13 @@ export default function StockExplorer() {
   const [trendingData, setTrendingData]       = useState({});
   const [trendingLoading, setTrendingLoading] = useState(false);
 
-  const debounceRef     = useRef(null);
-  const searchInputRef  = useRef(null);
-  const chartRef        = useRef(null);
-  const seriesRef       = useRef(null);
-  const quoteRef        = useRef(null);
+  const debounceRef      = useRef(null);
+  const searchInputRef   = useRef(null);
+  const chartRef         = useRef(null);
+  const seriesRef        = useRef(null);
+  const quoteRef         = useRef(null);
   const clearDrawingsRef = useRef(null);
+  const [chartContainerRef, setChartContainerRef] = useState(null);
 
   const countryObj  = COUNTRIES.find((c) => c.code === country) || COUNTRIES[0];
   const popularList = POPULAR[country] || POPULAR["US"];
@@ -1120,11 +1168,12 @@ export default function StockExplorer() {
                     chartType={chartType}
                     chartRef={chartRef}
                     seriesRef={seriesRef}
+                    onContainerReady={(ref) => setChartContainerRef(ref)}
                   />
                   <DrawingLayer
                     chartRef={chartRef}
                     seriesRef={seriesRef}
-                    isActive={chartType === "candle"}
+                    containerRef={chartContainerRef}
                     onClearConfirm={clearDrawingsRef}
                   />
                 </>
