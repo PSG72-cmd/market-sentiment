@@ -145,6 +145,13 @@ function DrawingLayer({ chartRef, seriesRef, containerRef: chartContainerRef, on
   const [inProgress, setInProgress] = useState(null);
   const [dims, setDims]             = useState({ w: 0, h: 0 });
 
+  // Sync active tool to body data attribute so CustomCursor can suppress trail
+  useEffect(() => {
+    document.body.dataset.drawTool = activeTool || "";
+    return () => { document.body.dataset.drawTool = ""; };
+  }, [activeTool]);
+
+
   // Measure the chart container to size the SVG
   useEffect(() => {
     const el = chartContainerRef?.current;

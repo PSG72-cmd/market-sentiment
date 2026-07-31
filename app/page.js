@@ -171,6 +171,47 @@ function AnimatedBar({ cls, value, delay, shouldReduce }) {
   );
 }
 
+
+// ── CountUpStat — animates from 0 to a numeric target ───────────────────────
+function CountUpStat({ rawValue, display, active, shouldReduce }) {
+  // rawValue: numeric to count up to. display: formatted string to show at end.
+  // active: boolean — start counting when true
+  const [shown, setShown] = useState(shouldReduce ? display : "0");
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (!active || startedRef.current || shouldReduce) {
+      if (shouldReduce) setShown(display);
+      return;
+    }
+    startedRef.current = true;
+    const duration = 700;
+    let startTs = null;
+    const step = (ts) => {
+      if (!startTs) startTs = ts;
+      const progress = Math.min((ts - startTs) / duration, 1);
+      // Ease-out cubic
+      const ease = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(ease * rawValue);
+      // Format with commas if rawValue >= 1000
+      if (rawValue >= 1000) {
+        setShown(current.toLocaleString());
+      } else if (rawValue < 10) {
+        // Keep decimal for small floats like 0.6408
+        setShown((ease * rawValue).toFixed(4));
+      } else {
+        setShown(String(current));
+      }
+      if (progress < 1) requestAnimationFrame(step);
+      else setShown(display);
+    };
+    requestAnimationFrame(step);
+  }, [active, rawValue, display, shouldReduce]);
+
+  return <span className="hero-stat-value">{shown}</span>;
+}
+
+
 // ── Main Page Component ──────────────────────────────────────────────────────
 export default function HomePage() {
   const shouldReduce = useReducedMotion();
@@ -357,30 +398,110 @@ export default function HomePage() {
   const CLASS_ORDER = ["positive", "neutral", "negative"];
   const probRows = CLASS_ORDER.filter((c) => c in probabilities);
 
-  // ── Entrance animation variants ────────────────────────────────────────
-  const heroVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: (i) => ({
-      opacity: 1, y: 0,
-      transition: {
-        type: "spring",
-        stiffness: 280,
-        damping: 26,
-        delay: shouldReduce ? 0 : i * 0.08,
-      },
-    }),
-  };
+  // ── Hero entrance state (Part F) ──────────────────────────────────────
+  // heroStage: 0 = not started, 1-5 = stages revealed sequentially.
+  // Gated by sessionStorage so it only plays once per browser session.
+  // Tab switches use tabContentVariants only — heroStage is NOT reset on tab change.
+  const [heroStage, setHeroStage] = useState(0);
+  const heroTimersRef = useRef([]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (sessionStorage.getItem("heroPlayed")) { setHeroStage(5); return; }
+    if (shouldReduce) { setHeroStage(5); sessionStorage.setItem("heroPlayed", "1"); return; }
+    // Stage delays: 0 / 300 / 600 / 900 / 1200ms
+    [0, 300, 600, 900, 1200].forEach((delay, idx) => {
+      const t = setTimeout(() => setHeroStage(idx + 1), delay);
+      heroTimersRef.current.push(t);
+    });
+    const done = setTimeout(() => sessionStorage.setItem("heroPlayed", "1"), 1600);
+    heroTimersRef.current.push(done);
+    return () => heroTimersRef.current.forEach(clearTimeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Nudge hero stage forward (used by scroll-jack)
+  const nudgeHeroStage = useCallback(() => {
+    setHeroStage((prev) => {
+      if (prev >= 5) return 5;
+      heroTimersRef.current.forEach(clearTimeout);
+      heroTimersRef.current = [];
+      const next = prev + 1;
+      for (let i = next; i <= 5; i++) {
+        const t = setTimeout(() => setHeroStage(i), (i - next) * 80);
+        heroTimersRef.current.push(t);
+      }
+      const done = setTimeout(() => sessionStorage.setItem("heroPlayed", "1"), (5 - next) * 80 + 100);
+      heroTimersRef.current.push(done);
+      return prev;
+    });
+  }, []);
+
+  // ── Scroll-jack (Part H) ────────────────────────────────────────────────
+  // Only fires on first page load per session, desktop non-touch only.
+  // Max 2 wheel events intercepted, then fully releases.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (sessionStorage.getItem("scrollJackDone")) return;
+    if (sessionStorage.getItem("heroPlayed")) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (window.matchMedia("(pointer: coarse)").matches) return;
+    if (window.innerWidth <= 640) return;
+
+    let interceptCount = 0;
+    let debounceTimer  = null;
+    let released       = false;
+
+    const release = () => {
+      if (released) return;
+      released = true;
+      window.removeEventListener("wheel", onWheel);
+      sessionStorage.setItem("scrollJackDone", "1");
+    };
+    // Auto-release after 2s regardless
+    const autoRelease = setTimeout(release, 2000);
+
+    const onWheel = (e) => {
+      if (released) return;
+      // 120ms debounce: trackpad fires rapid micro-events — treat burst as one input
+      if (debounceTimer) return;
+      debounceTimer = setTimeout(() => { debounceTimer = null; }, 120);
+      interceptCount++;
+      e.preventDefault();
+      nudgeHeroStage();
+      if (interceptCount >= 2) { clearTimeout(autoRelease); release(); }
+    };
+
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => { clearTimeout(autoRelease); clearTimeout(debounceTimer); release(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nudgeHeroStage]);
+
+  // ── Stage helpers ───────────────────────────────────────────────────────
+  const sv = (n) => heroStage >= n; // stageVisible(n)
+  const springBase = { type: "spring", stiffness: 260, damping: 28 };
+
+  const stageVariant = () => ({
+    hidden:  { opacity: 0, y: shouldReduce ? 0 : 22 },
+    visible: { opacity: 1, y: 0, transition: shouldReduce ? { duration: 0.01 } : springBase },
+  });
+
+  // Word-reveal for h1 (Stage 2) — each word clips in from below
+  const H1_WORDS  = ["Decode", "the", "Market"];
+  const SPAN_WORD = "Sentiment";
+  const wordReveal = (wordIdx) => ({
+    hidden:  { opacity: 0, y: shouldReduce ? 0 : 18, clipPath: "inset(0 0 100% 0)" },
+    visible: {
+      opacity: 1, y: 0, clipPath: "inset(0 0 0% 0)",
+      transition: shouldReduce ? { duration: 0.01 } : { ...springBase, delay: wordIdx * 0.06 },
+    },
+  });
 
   const chipVariants = {
     hidden: { opacity: 0, scale: 0.88 },
     visible: (i) => ({
       opacity: 1, scale: 1,
-      transition: {
-        type: "spring",
-        stiffness: 320,
-        damping: 22,
-        delay: shouldReduce ? 0 : 0.3 + i * 0.06,
-      },
+      transition: { type: "spring", stiffness: 320, damping: 22, delay: shouldReduce ? 0 : i * 0.06 },
     }),
   };
 
@@ -388,20 +509,17 @@ export default function HomePage() {
     hidden: { opacity: 0, scale: 0.8 },
     visible: (i) => ({
       opacity: 1, scale: 1,
-      transition: {
-        type: "spring",
-        stiffness: 400,
-        damping: 22,
-        delay: shouldReduce ? 0 : i * 0.04,
-      },
+      transition: { type: "spring", stiffness: 400, damping: 22, delay: shouldReduce ? 0 : i * 0.04 },
     }),
   };
 
   const tabContentVariants = {
-    hidden: { opacity: 0, x: shouldReduce ? 0 : 16 },
+    hidden:  { opacity: 0, x: shouldReduce ? 0 : 16 },
     visible: { opacity: 1, x: 0, transition: { duration: 0.25, ease: "easeOut" } },
-    exit:   { opacity: 0, x: shouldReduce ? 0 : -16, transition: { duration: 0.18 } },
+    exit:    { opacity: 0, x: shouldReduce ? 0 : -16, transition: { duration: 0.18 } },
   };
+
+
 
   return (
     <>
@@ -519,67 +637,82 @@ export default function HomePage() {
             exit="exit"
           >
             <main className="page-wrapper">
-              {/* ── Hero ───────────────────────────────────────────── */}
+              {/* Stage 1-2: eyebrow + title */}
               <section className="hero">
+
                 <motion.div
                   className="hero-eyebrow"
-                  variants={heroVariants}
+                  variants={stageVariant()}
                   initial="hidden"
-                  animate="visible"
-                  custom={0}
+                  animate={sv(2) ? "visible" : "hidden"}
                 >
                   <div className="hero-eyebrow-dot" />
                   NLP · Financial Sentiment
                 </motion.div>
 
-                <motion.h1
-                  variants={heroVariants}
-                  initial="hidden"
-                  animate="visible"
-                  custom={1}
-                >
-                  Decode the Market <span>Sentiment</span>
-                </motion.h1>
+                {/* h1: word-by-word reveal */}
+                <h1 style={{ display: "flex", flexWrap: "wrap", gap: "0 0.3em", overflow: "hidden" }}>
+                  {H1_WORDS.map((word, wi) => (
+                    <motion.span
+                      key={word}
+                      variants={wordReveal(wi)}
+                      initial="hidden"
+                      animate={sv(2) ? "visible" : "hidden"}
+                      style={{ display: "inline-block" }}
+                    >
+                      {word}
+                    </motion.span>
+                  ))}
+                  <motion.span
+                    variants={wordReveal(H1_WORDS.length)}
+                    initial="hidden"
+                    animate={sv(2) ? "visible" : "hidden"}
+                    style={{ display: "inline-block" }}
+                  >
+                    <span>{SPAN_WORD}</span>
+                  </motion.span>
+                </h1>
 
+                {/* Stage 3: subtitle */}
                 <motion.p
                   className="hero-sub"
-                  variants={heroVariants}
+                  variants={stageVariant()}
                   initial="hidden"
-                  animate="visible"
-                  custom={2}
+                  animate={sv(3) ? "visible" : "hidden"}
                 >
                   A Logistic Regression model trained on TF-IDF features and a 900+ term financial
                   lexicon classifies financial text as positive, neutral, or negative in real time.
                 </motion.p>
 
+                {/* Stage 4: stats row with count-up */}
                 <motion.div
                   className="hero-stats"
-                  variants={heroVariants}
+                  variants={stageVariant()}
                   initial="hidden"
-                  animate="visible"
-                  custom={3}
+                  animate={sv(4) ? "visible" : "hidden"}
                 >
                   <div className="hero-stat">
-                    <span className="hero-stat-value">0.6408</span>
+                    <CountUpStat rawValue={0.6408} display="0.6408" active={sv(4)} shouldReduce={shouldReduce} />
                     <span className="hero-stat-label">Macro F1</span>
                   </div>
                   <div className="hero-stat-divider" />
                   <div className="hero-stat">
-                    <span className="hero-stat-value">3,005</span>
+                    <CountUpStat rawValue={3005} display="3,005" active={sv(4)} shouldReduce={shouldReduce} />
                     <span className="hero-stat-label">Features</span>
                   </div>
                   <div className="hero-stat-divider" />
                   <div className="hero-stat">
-                    <span className="hero-stat-value">900+</span>
+                    <CountUpStat rawValue={900} display="900+" active={sv(4)} shouldReduce={shouldReduce} />
                     <span className="hero-stat-label">Lexicon Terms</span>
                   </div>
                   <div className="hero-stat-divider" />
                   <div className="hero-stat">
-                    <span className="hero-stat-value">3</span>
+                    <CountUpStat rawValue={3} display="3" active={sv(4)} shouldReduce={shouldReduce} />
                     <span className="hero-stat-label">Classes</span>
                   </div>
                 </motion.div>
               </section>
+
 
               {/* ── Mode toggle: Single | Batch ──────────────────── */}
               <div className="mode-toggle" role="group" aria-label="Analysis mode">
@@ -599,14 +732,14 @@ export default function HomePage() {
                 </button>
               </div>
 
-              {/* ── Input Card ────────────────────────────────────── */}
+              {/* Stage 5: input card rises last (1200ms) */}
               <motion.div
                 className="input-card"
-                variants={heroVariants}
+                variants={stageVariant()}
                 initial="hidden"
-                animate="visible"
-                custom={4}
+                animate={sv(5) ? "visible" : "hidden"}
               >
+
                 <div className="input-label">
                   <span className="input-label-text">Financial Text</span>
                   <span className={`char-count ${charClass}`}>
