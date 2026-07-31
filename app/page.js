@@ -651,7 +651,7 @@ export default function HomePage() {
                 </motion.div>
 
                 {/* h1: word-by-word reveal */}
-                <h1 style={{ display: "flex", flexWrap: "wrap", gap: "0 0.3em", overflow: "hidden" }}>
+                <h1 style={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: "0 0.3em", overflow: "hidden" }}>
                   {H1_WORDS.map((word, wi) => (
                     <motion.span
                       key={word}
