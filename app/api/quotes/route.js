@@ -1,9 +1,13 @@
 /**
  * Next.js App Router API route — /api/quotes?country=US
  * Returns live stock quotes for the selected country's top stocks.
- * Uses Yahoo Finance v8/chart endpoint (works server-side with browser headers).
  *
- * Supported country codes: US, IN, UK, DE, JP, CN, AU, BR
+ * Yahoo Finance now requires crumb+cookie auth for server-side requests.
+ * Strategy:
+ *   1. Fetch a Yahoo Finance crumb once per cold start (cached in module scope)
+ *   2. Use crumb + cookie in all subsequent chart requests
+ *   3. Try query1 first, fall back to query2 on failure
+ *   4. Individual symbol failures return "—" without killing the whole batch
  */
 
 const COUNTRY_SYMBOLS = {
@@ -80,16 +84,16 @@ const COUNTRY_SYMBOLS = {
     { display: "WOW",    yahoo: "WOW.AX"  },
   ],
   BR: [
-    { display: "PETRO",   yahoo: "PETR4.SA" },
-    { display: "VALE",    yahoo: "VALE3.SA" },
-    { display: "ITAÚ",    yahoo: "ITUB4.SA" },
-    { display: "BRADESCO",yahoo: "BBDC4.SA" },
-    { display: "B3",      yahoo: "B3SA3.SA" },
-    { display: "AMBEV",   yahoo: "ABEV3.SA" },
-    { display: "WEG",     yahoo: "WEGE3.SA" },
-    { display: "RENNER",  yahoo: "LREN3.SA" },
-    { display: "EMBRAER", yahoo: "EMBR3.SA" },
-    { display: "TOTVS",   yahoo: "TOTS3.SA" },
+    { display: "PETRO",    yahoo: "PETR4.SA" },
+    { display: "VALE",     yahoo: "VALE3.SA" },
+    { display: "ITAÚ",     yahoo: "ITUB4.SA" },
+    { display: "BRADESCO", yahoo: "BBDC4.SA" },
+    { display: "B3",       yahoo: "B3SA3.SA" },
+    { display: "AMBEV",    yahoo: "ABEV3.SA" },
+    { display: "WEG",      yahoo: "WEGE3.SA" },
+    { display: "RENNER",   yahoo: "LREN3.SA" },
+    { display: "EMBRAER",  yahoo: "EMBR3.SA" },
+    { display: "TOTVS",    yahoo: "TOTS3.SA" },
   ],
   CN: [
     { display: "ALIBABA", yahoo: "BABA"   },
@@ -97,30 +101,82 @@ const COUNTRY_SYMBOLS = {
     { display: "JD.COM",  yahoo: "JD"     },
     { display: "BAIDU",   yahoo: "BIDU"   },
     { display: "NIO",     yahoo: "NIO"    },
-    { display: "BIDU",    yahoo: "BIDU"   },
     { display: "PDD",     yahoo: "PDD"    },
     { display: "XPENG",   yahoo: "XPEV"   },
     { display: "LI AUTO", yahoo: "LI"     },
     { display: "NETEASE", yahoo: "NTES"   },
+    { display: "BILIBILI",yahoo: "BILI"   },
   ],
 };
 
-const HEADERS = {
+// ── Crumb cache (module-scoped, persists across warm invocations) ─────────────
+let crumbCache = null; // { crumb, cookie, expiresAt }
+
+const BASE_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Accept": "application/json, text/plain, */*",
   "Accept-Language": "en-US,en;q=0.9",
   "Referer": "https://finance.yahoo.com/",
-  "Origin": "https://finance.yahoo.com",
+  "Origin":  "https://finance.yahoo.com",
 };
+
+/**
+ * Fetch a Yahoo Finance crumb + session cookie.
+ * The crumb is required for all API calls from server-side environments.
+ * Cached for 50 minutes to avoid extra round-trips on warm Lambda invocations.
+ */
+async function getCrumb() {
+  const now = Date.now();
+  if (crumbCache && crumbCache.expiresAt > now) return crumbCache;
+
+  // Step 1: hit the consent / main page to get a cookie
+  const consentRes = await fetch("https://fc.yahoo.com", {
+    headers: BASE_HEADERS,
+    redirect: "follow",
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => null);
+
+  const cookieHeader = consentRes?.headers?.get("set-cookie") ?? "";
+  // Extract the A1 or similar session cookie
+  const cookie = cookieHeader
+    .split(",")
+    .map((c) => c.trim().split(";")[0])
+    .filter(Boolean)
+    .join("; ") || "A1=d=AQABBFi...; A3=d=AQABBFi..."; // safe no-op fallback
+
+  // Step 2: fetch the crumb
+  const crumbRes = await fetch(
+    "https://query2.finance.yahoo.com/v1/test/getcrumb",
+    {
+      headers: { ...BASE_HEADERS, Cookie: cookie },
+      signal: AbortSignal.timeout(5000),
+    }
+  );
+
+  if (!crumbRes.ok) throw new Error(`crumb fetch failed: ${crumbRes.status}`);
+  const crumb = await crumbRes.text();
+  if (!crumb || crumb.includes("<")) throw new Error("invalid crumb response");
+
+  crumbCache = { crumb, cookie, expiresAt: now + 50 * 60 * 1000 };
+  return crumbCache;
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const country = (searchParams.get("country") ?? "US").toUpperCase();
   const symbols = COUNTRY_SYMBOLS[country] ?? COUNTRY_SYMBOLS["US"];
 
+  // Try to get crumb; if it fails, proceed without (some symbols may still work)
+  let auth = null;
+  try {
+    auth = await getCrumb();
+  } catch {
+    // continue without crumb — direct fetch may still work for some regions
+  }
+
   const results = await Promise.allSettled(
-    symbols.map(({ display, yahoo }) => fetchChart(display, yahoo))
+    symbols.map(({ display, yahoo }) => fetchChart(display, yahoo, auth))
   );
 
   const quotes = results.map((r, i) =>
@@ -135,39 +191,71 @@ export async function GET(request) {
   );
 }
 
-async function fetchChart(display, yahooSymbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1d`;
+async function fetchChart(display, yahooSymbol, auth) {
+  const crumbParam = auth?.crumb ? `&crumb=${encodeURIComponent(auth.crumb)}` : "";
+  const cookieHeader = auth?.cookie ? { Cookie: auth.cookie } : {};
 
-  const res = await fetch(url, {
-    headers: HEADERS,
-    signal: AbortSignal.timeout(7000),
-    next: { revalidate: 25 },
-  });
+  // Try query2 first (less blocked on cloud IPs), then query1
+  const hosts = ["query2.finance.yahoo.com", "query1.finance.yahoo.com"];
 
-  if (!res.ok) throw new Error(`Yahoo ${res.status} for ${display}`);
+  let lastError;
+  for (const host of hosts) {
+    const url = `https://${host}/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d${crumbParam}`;
+    try {
+      const res = await fetch(url, {
+        headers: { ...BASE_HEADERS, ...cookieHeader },
+        signal: AbortSignal.timeout(8000),
+        next: { revalidate: 25 },
+      });
 
-  const json = await res.json();
-  const meta = json?.chart?.result?.[0]?.meta;
-  if (!meta) throw new Error(`no meta for ${display}`);
+      if (!res.ok) {
+        lastError = new Error(`HTTP ${res.status} for ${display} on ${host}`);
+        continue;
+      }
 
-  const price = meta.regularMarketPrice ?? meta.previousClose;
-  const prevClose = meta.previousClose ?? meta.chartPreviousClose;
+      const json = await res.json();
+      const meta = json?.chart?.result?.[0]?.meta;
+      if (!meta) {
+        lastError = new Error(`no meta for ${display}`);
+        continue;
+      }
 
-  if (!price) throw new Error(`no price for ${display}`);
+      // Prefer regularMarketPrice, fall back through chain
+      const price =
+        meta.regularMarketPrice ??
+        meta.postMarketPrice ??
+        meta.preMarketPrice ??
+        meta.previousClose ??
+        meta.chartPreviousClose;
 
-  const changePct = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
-  const up = changePct >= 0;
+      const prevClose =
+        meta.previousClose ??
+        meta.chartPreviousClose ??
+        meta.regularMarketPreviousClose;
 
-  // Format currency symbol per exchange
-  const currency = meta.currency ?? "USD";
-  const symbol = getCurrencySymbol(currency);
+      if (!price) {
+        lastError = new Error(`no price for ${display}`);
+        continue;
+      }
 
-  return {
-    symbol: display,
-    price: `${symbol}${formatPrice(price)}`,
-    change: `${up ? "+" : ""}${changePct.toFixed(2)}%`,
-    up,
-  };
+      const changePct = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
+      const up = changePct >= 0;
+
+      const currency = meta.currency ?? "USD";
+      const currSym  = getCurrencySymbol(currency);
+
+      return {
+        symbol: display,
+        price:  `${currSym}${formatPrice(price)}`,
+        change: `${up ? "+" : ""}${changePct.toFixed(2)}%`,
+        up,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError ?? new Error(`failed for ${display}`);
 }
 
 function getCurrencySymbol(currency) {
