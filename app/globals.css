@@ -1966,3 +1966,246 @@ textarea::placeholder {
   .custom-cursor-ring { display: none !important; }
 }
 
+/* ---------- Part I: Hover-Reveal Title ---------- */
+.title-hover {
+  margin: 0;
+  height: auto;
+  background: transparent;
+  padding: 0;
+  border: none;
+  position: relative;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(233, 237, 245, 0.5); /* Muted version of text-primary */
+  display: inline-flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0 0.3em;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.title-hover .hover-text {
+  position: absolute;
+  box-sizing: border-box;
+  content: attr(data-text);
+  color: var(--accent-green);
+  width: 0%;
+  inset: 0;
+  border-right: 6px solid var(--accent-green);
+  overflow: hidden;
+  transition: 0.5s;
+  -webkit-text-stroke: 1px var(--accent-green);
+  white-space: nowrap;
+}
+
+.title-hover:hover .hover-text {
+  width: 100%;
+  filter: drop-shadow(0 0 23px var(--accent-green));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-hover .hover-text {
+    transition: none;
+    width: 100%;
+    filter: drop-shadow(0 0 23px var(--accent-green));
+  }
+}
+
+/* Touch devices trigger once */
+@media (pointer: coarse) {
+  .title-hover .hover-text {
+    animation: title-reveal-touch 1s ease forwards 0.5s;
+  }
+}
+
+@keyframes title-reveal-touch {
+  to {
+    width: 100%;
+    filter: drop-shadow(0 0 23px var(--accent-green));
+  }
+}
+
+
+/* ---------- Part J: Glow-Border Trending Cards ---------- */
+.stock-card-wrapper {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.stock-card-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from 0deg,
+    var(--accent-green),
+    transparent 40%,
+    transparent 60%,
+    var(--accent-green)
+  );
+  animation: rotate-glow 4s linear infinite;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.stock-card-wrapper:hover::before {
+  opacity: 1;
+}
+
+.stock-card__inner {
+  position: relative;
+  background: var(--bg-surface);
+  border-radius: 10px;
+  margin: 2px;
+  z-index: 2;
+  height: calc(100% - 4px);
+  width: calc(100% - 4px);
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  text-align: left;
+}
+
+@keyframes rotate-glow {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stock-card-wrapper::before {
+    animation: none;
+    background: var(--accent-green-dim);
+  }
+}
+
+
+/* ---------- Part K: Share Button with Social Tooltip ---------- */
+.share-btn-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.share-button-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #059669, var(--accent-green));
+  color: #021a0e;
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  transition: transform 0.2s;
+}
+
+.share-button-content:hover {
+  transform: scale(1.05);
+}
+
+.share-button-content::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #059669, var(--accent-green));
+  z-index: -1;
+  filter: blur(8px);
+  opacity: 0.6;
+}
+
+.share-button-content.pulse {
+  animation: share-pulse 2s infinite;
+}
+
+@keyframes share-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); }
+  70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+.share-tooltip-container {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  right: 50%;
+  transform: translateX(50%) scale(0.8);
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  z-index: 10;
+  transform-origin: bottom center;
+}
+
+.share-btn-wrapper:hover .share-tooltip-container,
+.share-btn-wrapper.active .share-tooltip-container {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(50%) scale(1);
+}
+
+.share-tooltip-content {
+  display: flex;
+  gap: 8px;
+  background: rgba(30, 30, 30, 0.9);
+  padding: 8px 12px;
+  border-radius: 20px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.1);
+  position: relative;
+}
+
+.share-tooltip-content::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 6px;
+  border-style: solid;
+  border-color: rgba(30, 30, 30, 0.9) transparent transparent transparent;
+}
+
+.share-social-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.05);
+  text-decoration: none;
+  transition: all 0.2s;
+  cursor: pointer;
+  border: none;
+}
+
+.share-social-icon:hover {
+  background: rgba(255,255,255,0.15);
+  transform: translateY(-2px);
+}
+
+.share-social-icon.twitter:hover { color: #1DA1F2; }
+.share-social-icon.linkedin:hover { color: #0077b5; }
+.share-social-icon.copy:hover { color: var(--accent-green); }
+
+@media (prefers-reduced-motion: reduce) {
+  .share-button-content.pulse { animation: none; }
+  .share-tooltip-container { transition: opacity 0.1s; transform: translateX(50%) scale(1); }
+  .share-btn-wrapper:hover .share-tooltip-container,
+  .share-btn-wrapper.active .share-tooltip-container {
+    transform: translateX(50%) scale(1);
+  }
+}
+

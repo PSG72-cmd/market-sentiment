@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import ShareButton from "./ShareButton";
 
 // ── Popular tickers per country (trending grid only — not used for search) ─
 const POPULAR = {
@@ -1015,30 +1016,35 @@ export default function StockExplorer() {
                 const d    = trendingData[t.symbol];
                 const isUp = d ? d.isUp : true;
                 return (
-                  <motion.button
-                    key={t.symbol} id={`trending-${t.symbol}`}
-                    className={`stock-trending-card ${d ? (isUp ? "up" : "down") : ""}`}
-                    onClick={() => fetchStock(t.symbol)}
+                  <motion.div
+                    key={t.symbol} id={`trending-wrapper-${t.symbol}`}
+                    className="stock-card-wrapper"
                     variants={popIn} initial="hidden" animate="visible" custom={i}
                     whileHover={shouldReduce ? {} : { scale: 1.03, transition: { type: "spring", stiffness: 400, damping: 20 } }}
                   >
-                    <div className="stock-trending-header">
-                      <span className="stock-trending-symbol">{t.symbol}</span>
-                      {trendingLoading && !d ? (
-                        <Skeleton width="48px" height="12px" />
-                      ) : d ? (
-                        <span className={`stock-trending-change ${isUp ? "up" : "down"}`}>
-                          {isUp ? "▲" : "▼"} {d.changePct}%
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="stock-trending-name">{t.name}</div>
-                    {d ? (
-                      <div className="stock-trending-price">{d.price}</div>
-                    ) : (
-                      <Skeleton width="60px" height="18px" style={{ marginTop: 6 }} />
-                    )}
-                  </motion.button>
+                    <button
+                      id={`trending-${t.symbol}`}
+                      className={`stock-card__inner stock-trending-card ${d ? (isUp ? "up" : "down") : ""}`}
+                      onClick={() => fetchStock(t.symbol)}
+                    >
+                      <div className="stock-trending-header">
+                        <span className="stock-trending-symbol">{t.symbol}</span>
+                        {trendingLoading && !d ? (
+                          <Skeleton width="48px" height="12px" />
+                        ) : d ? (
+                          <span className={`stock-trending-change ${isUp ? "up" : "down"}`}>
+                            {isUp ? "▲" : "▼"} {d.changePct}%
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="stock-trending-name">{t.name}</div>
+                      {d ? (
+                        <div className="stock-trending-price">{d.price}</div>
+                      ) : (
+                        <Skeleton width="60px" height="18px" style={{ marginTop: 6 }} />
+                      )}
+                    </button>
+                  </motion.div>
                 );
               })}
             </div>
@@ -1116,7 +1122,10 @@ export default function StockExplorer() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                   {stockData.exchange && <div className="stock-quote-exchange">{stockData.exchange}</div>}
-                  <ExportButton targetRef={quoteRef} filename={`${stockData.ticker}-quote`} />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <ShareButton />
+                    <ExportButton targetRef={quoteRef} filename={`${stockData.ticker}-quote`} />
+                  </div>
                 </div>
               </div>
 

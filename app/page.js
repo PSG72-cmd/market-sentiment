@@ -8,6 +8,7 @@ import {
 } from "framer-motion";
 import dynamic from "next/dynamic";
 import { appendHistory } from "./components/HistoryPanel";
+import ShareButton from "./components/ShareButton";
 
 // Lazy-load StockExplorer so lightweight-charts only loads on demand
 const StockExplorer = dynamic(() => import("./components/StockExplorer"), {
@@ -650,28 +651,17 @@ export default function HomePage() {
                   NLP · Financial Sentiment
                 </motion.div>
 
-                {/* h1: word-by-word reveal */}
-                <h1 style={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: "0 0.3em", overflow: "hidden" }}>
-                  {H1_WORDS.map((word, wi) => (
-                    <motion.span
-                      key={word}
-                      variants={wordReveal(wi)}
-                      initial="hidden"
-                      animate={sv(2) ? "visible" : "hidden"}
-                      style={{ display: "inline-block" }}
-                    >
-                      {word}
-                    </motion.span>
-                  ))}
-                  <motion.span
-                    variants={wordReveal(H1_WORDS.length)}
-                    initial="hidden"
-                    animate={sv(2) ? "visible" : "hidden"}
-                    style={{ display: "inline-block" }}
-                  >
-                    <span>{SPAN_WORD}</span>
-                  </motion.span>
-                </h1>
+                {/* h1: hover-reveal title (Part I) */}
+                <motion.h1 
+                  className="title-hover"
+                  data-text="Decode the Market Sentiment"
+                  variants={stageVariant(2)}
+                  initial="hidden"
+                  animate={sv(2) ? "visible" : "hidden"}
+                >
+                  <span className="actual-text">Decode the Market Sentiment</span>
+                  <span aria-hidden="true" className="hover-text">Decode the Market Sentiment</span>
+                </motion.h1>
 
                 {/* Stage 3: subtitle */}
                 <motion.p
@@ -872,6 +862,7 @@ export default function HomePage() {
                         <span className={`result-confidence-badge ${sentiment}`}>
                           {toPercent(probabilities[sentiment] ?? 0)} confidence
                         </span>
+                        <ShareButton />
                         <button
                           className="export-btn"
                           onClick={exportResultCard}
