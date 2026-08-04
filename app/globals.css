@@ -1123,7 +1123,7 @@ textarea::placeholder {
 
 .stock-trending-name {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--text-secondary); /* was --text-muted (#475569, 2.9:1) → now #94a3b8, 4.8:1 — WCAG AA ✓ */
   margin-bottom: 6px;
   white-space: nowrap;
   overflow: hidden;
@@ -2209,3 +2209,269 @@ textarea::placeholder {
   }
 }
 
+
+/* ============================================================
+   Part N — Sun/Moon Theme Toggle (Uiverse, scoped with theme- prefix)
+   Unchecked = DARK (default, moon + stars)
+   Checked   = LIGHT (sun + rays + clouds)
+   ============================================================ */
+
+.theme-switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 34px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.theme-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.theme-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elevated);   /* dark: uses our surface token */
+  border: 1px solid rgba(255,255,255,0.12);
+  transition: background 0.4s ease, border-color 0.4s ease;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.theme-slider.theme-round {
+  border-radius: 34px;
+}
+
+/* Checked = LIGHT: sky-blue track */
+.theme-switch input:checked + .theme-slider {
+  background: #7ec8e3;
+  border-color: rgba(255,255,255,0.3);
+}
+
+/* ── Knob (sun-moon ball) ───────────────────────────────────────────── */
+.theme-sun-moon {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #f5c842;  /* sun yellow */
+  transition: transform 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55), background 0.4s ease;
+  z-index: 2;
+}
+
+.theme-switch input:checked + .theme-slider .theme-sun-moon {
+  transform: translateX(26px);
+  background: #e8e8e8;  /* moon white */
+}
+
+/* ── Moon craters ───────────────────────────────────────────────────── */
+.theme-moon-dot {
+  position: absolute;
+  fill: var(--text-muted);
+  border-radius: 50%;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+#theme-moon-dot-1 { width: 6px; height: 6px; top: 5px; left: 5px; }
+#theme-moon-dot-2 { width: 4px; height: 4px; top: 14px; left: 12px; }
+#theme-moon-dot-3 { width: 3px; height: 3px; top: 8px; left: 15px; }
+
+/* Hide craters when in sun (light) state */
+.theme-switch input:checked + .theme-slider .theme-moon-dot {
+  opacity: 0;
+}
+
+/* ── Sun rays ───────────────────────────────────────────────────────── */
+.theme-light-ray {
+  position: absolute;
+  fill: #f5c842;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.4s ease;
+}
+
+#theme-light-ray-1 { width: 5px; height: 5px; top: -3px; left: 10px; transform: rotate(0deg) translateY(-6px); }
+#theme-light-ray-2 { width: 4px; height: 4px; top: 10px; left: -3px; transform: rotate(90deg) translateY(-6px); }
+#theme-light-ray-3 { width: 4px; height: 4px; top: 22px; left: 10px; transform: rotate(180deg) translateY(-6px); }
+
+/* Show rays when in sun (light) state */
+.theme-switch input:checked + .theme-slider .theme-light-ray {
+  opacity: 1;
+}
+
+/* ── Clouds (dark = visible in moon state, light = visible in sun) ─── */
+.theme-cloud-dark,
+.theme-cloud-light {
+  position: absolute;
+  border-radius: 50%;
+  transition: transform 0.5s ease, opacity 0.3s ease;
+}
+
+.theme-cloud-dark { fill: rgba(255,255,255,0.15); }
+.theme-cloud-light { fill: rgba(255,255,255,0.5); }
+
+#theme-cloud-1 { width: 12px; height: 12px; top: 6px; right: 8px; opacity: 0.8; }
+#theme-cloud-2 { width: 8px; height: 8px; top: 10px; right: 4px; opacity: 0.6; }
+#theme-cloud-3 { width: 6px; height: 6px; top: 4px; right: 16px; opacity: 0.5; }
+
+#theme-cloud-4 { width: 14px; height: 14px; bottom: 5px; right: 6px; opacity: 0; }
+#theme-cloud-5 { width: 9px; height: 9px; bottom: 10px; right: 2px; opacity: 0; }
+#theme-cloud-6 { width: 7px; height: 7px; bottom: 4px; right: 16px; opacity: 0; }
+
+/* When light (sun) → swap which clouds are visible */
+.theme-switch input:checked + .theme-slider .theme-cloud-dark { opacity: 0; }
+.theme-switch input:checked + .theme-slider #theme-cloud-4 { opacity: 0.8; }
+.theme-switch input:checked + .theme-slider #theme-cloud-5 { opacity: 0.6; }
+.theme-switch input:checked + .theme-slider #theme-cloud-6 { opacity: 0.5; }
+
+/* ── Stars ──────────────────────────────────────────────────────────── */
+.theme-stars {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.theme-star {
+  position: absolute;
+  fill: rgba(255,255,255,0.8);
+  transition: opacity 0.3s ease;
+  animation: theme-twinkle 2.5s ease-in-out infinite;
+}
+
+#theme-star-1 { width: 5px; height: 5px; top: 5px; right: 10px; animation-delay: 0s; }
+#theme-star-2 { width: 3px; height: 3px; top: 14px; right: 18px; animation-delay: 0.5s; }
+#theme-star-3 { width: 4px; height: 4px; top: 8px; right: 28px; animation-delay: 1s; }
+#theme-star-4 { width: 3px; height: 3px; top: 20px; right: 8px; animation-delay: 1.5s; }
+
+/* Stars are visible in DARK (moon) mode, hidden in LIGHT (sun) */
+.theme-switch input:checked + .theme-slider .theme-star {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes theme-twinkle {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0.2; }
+}
+
+/* ── Focus ring for keyboard accessibility ──────────────────────────── */
+.theme-switch input:focus-visible + .theme-slider {
+  outline: 2px solid var(--accent-green);
+  outline-offset: 2px;
+}
+
+/* ── prefers-reduced-motion ─────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .theme-sun-moon,
+  .theme-slider,
+  .theme-moon-dot,
+  .theme-light-ray,
+  .theme-cloud-dark,
+  .theme-cloud-light { transition: none; }
+  .theme-star { animation: none; }
+}
+
+
+/* ============================================================
+   Light Mode Variable Overrides — [data-theme="light"] on <html>
+   Signal colors (green/red/amber) are unchanged — they're the
+   app's core identity and work well on light backgrounds.
+   ============================================================ */
+
+[data-theme="light"] {
+  --bg-base:     #f0f4f8;
+  --bg-surface:  #ffffff;
+  --bg-elevated: #e8edf3;
+  --bg-card:     #f8fafc;
+
+  --border-dim:  rgba(0, 0, 0, 0.08);
+  --border-glow: rgba(5, 150, 105, 0.3);
+
+  --text-primary:   #0f1728;
+  --text-secondary: #374151;
+  --text-muted:     #6b7280;
+
+  --shadow-card: 0 4px 20px rgba(0,0,0,0.1), 0 1px 0 rgba(255,255,255,0.8) inset;
+
+  /* Keep signal colors intact */
+  --accent-green-dim:  rgba(52, 211, 153, 0.15);
+  --accent-red-dim:    rgba(251, 113, 133, 0.15);
+  --accent-amber-dim:  rgba(251, 191, 92, 0.15);
+
+  /* Tone-down glow on light backgrounds */
+  --accent-green-glow: rgba(52, 211, 153, 0.25);
+  --accent-red-glow:   rgba(251, 113, 133, 0.25);
+  --accent-amber-glow: rgba(251, 191, 92, 0.25);
+}
+
+/* ── Light mode: navbar background ─────────────────────────────────── */
+[data-theme="light"] .navbar {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom-color: rgba(0,0,0,0.1);
+}
+
+/* ── Light mode: body gradient ──────────────────────────────────────── */
+[data-theme="light"] body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(52,211,153,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(96,165,250,0.06) 0%, transparent 50%);
+}
+
+/* ── Light mode: ticker tape fade ───────────────────────────────────── */
+[data-theme="light"] .ticker-wrapper::before {
+  background: linear-gradient(to right, var(--bg-surface), transparent);
+}
+[data-theme="light"] .ticker-wrapper::after {
+  background: linear-gradient(to left, var(--bg-surface), transparent);
+}
+
+/* ── Light mode: hover-reveal title stroke ──────────────────────────── */
+[data-theme="light"] .title-hover {
+  -webkit-text-stroke: 1px rgba(15, 23, 40, 0.35);
+}
+
+/* ── Light mode: custom cursor — hidden (too dark against light bg) ─── */
+[data-theme="light"] .custom-cursor-glow,
+[data-theme="light"] .custom-cursor-core,
+[data-theme="light"] .custom-cursor-ring {
+  display: none !important;
+}
+
+/* ── Light mode: glow-border card — reduce glow intensity ───────────── */
+[data-theme="light"] .stock-card-wrapper::before {
+  background: conic-gradient(
+    from 0deg,
+    var(--accent-green),
+    rgba(52,211,153,0.2) 40%,
+    rgba(52,211,153,0.2) 60%,
+    var(--accent-green)
+  );
+}
+
+/* ── Light mode: floating ambience ──────────────────────────────────── */
+[data-theme="light"] .ambient-orb {
+  opacity: 0.06;
+}
+
+/* ── Light mode: theme toggle track in light (keep toggle visible) ──── */
+[data-theme="light"] .theme-slider {
+  border-color: rgba(0,0,0,0.15);
+}
+
+/* ── Light mode: tabs ──────────────────────────────────────────────── */
+[data-theme="light"] .tab-nav {
+  background: var(--bg-surface);
+  border-color: var(--border-dim);
+}
+
+/* ── Light mode: input card focus ring ─────────────────────────────── */
+[data-theme="light"] textarea:focus {
+  box-shadow: 0 0 0 3px rgba(52,211,153,0.15);
+}

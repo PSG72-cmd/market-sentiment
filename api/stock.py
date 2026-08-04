@@ -95,6 +95,18 @@ def _safe(val, fmt=".2f"):
         return "—"
 
 
+# ── Country → Yahoo Finance region/lang for search API ────────────────────
+COUNTRY_YAHOO_REGION = {
+    "US": ("US", "en-US"),
+    "IN": ("IN", "en-IN"),
+    "UK": ("GB", "en-GB"),
+    "JP": ("JP", "ja-JP"),
+    "DE": ("DE", "de-DE"),
+    "CA": ("CA", "en-CA"),
+    "HK": ("HK", "zh-HK"),
+    "AU": ("AU", "en-AU"),
+}
+
 # ── Search endpoint ────────────────────────────────────────────────────────
 
 def search_tickers(query: str, country: str) -> list:
@@ -102,16 +114,50 @@ def search_tickers(query: str, country: str) -> list:
     Query Yahoo Finance's public search API and return a clean list of
     {symbol, name, exchange} dicts, prioritising results matching the
     country's suffix convention.
+
+    Root-cause fix (Part M): Previously hardcoded lang=en-US&region=US for all
+    countries, causing Yahoo to return US-biased results even when a non-US
+    country was selected. Now uses country-specific region/lang, and appends
+    the exchange suffix as a query hint so Yahoo finds the right exchange.
     """
     cache_key = f"search:{query.lower().strip()}:{country}"
     cached = _get_cached(cache_key, ttl=_SEARCH_TTL)
     if cached is not None:
         return cached
 
+    suffix   = COUNTRY_SUFFIX.get(country, "")
+    region, lang = COUNTRY_YAHOO_REGION.get(country, ("US", "en-US"))
+
+    # For non-US countries, augment the query with the exchange suffix hint
+    # e.g. searching "reliance" for IN → "reliance .NS" surfaces NSI-listed results first
+    augmented_query = query
+    if suffix and not query.upper().endswith(suffix.upper()):
+        augmented_query = f"{query} {suffix}"
+
+    results = _yahoo_search(augmented_query, suffix, region, lang)
+
+    # If augmented query returned < 3 priority results, also try bare query
+    priority_count = sum(1 for r in results if suffix and r["symbol"].endswith(suffix))
+    if suffix and priority_count < 2 and augmented_query != query:
+        bare_results = _yahoo_search(query, suffix, region, lang)
+        # Merge: priority from bare, then remainder of augmented
+        seen = {r["symbol"] for r in results}
+        for r in bare_results:
+            if r["symbol"] not in seen:
+                results.append(r)
+                seen.add(r["symbol"])
+
+    results = results[:10]
+    _set_cache(cache_key, results)
+    return results
+
+
+def _yahoo_search(query: str, suffix: str, region: str, lang: str) -> list:
+    """Inner function: hit Yahoo search API and return prioritised list."""
     url = (
         "https://query2.finance.yahoo.com/v1/finance/search"
-        f"?q={urlquote(query)}&quotesCount=12&newsCount=0"
-        "&enableFuzzyQuery=false&lang=en-US&region=US"
+        f"?q={urlquote(query)}&quotesCount=15&newsCount=0"
+        f"&enableFuzzyQuery=true&lang={lang}&region={region}"
     )
     headers = {
         "User-Agent": (
@@ -120,20 +166,17 @@ def search_tickers(query: str, country: str) -> list:
             "Chrome/120.0.0.0 Safari/537.36"
         ),
         "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": f"{lang},en;q=0.8",
     }
 
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=6) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        _set_cache(cache_key, [])
         return []
 
-    quotes = data.get("quotes", [])
-    suffix = COUNTRY_SUFFIX.get(country, "")
-
+    quotes   = data.get("quotes", [])
     priority = []
     secondary = []
 
@@ -141,9 +184,9 @@ def search_tickers(query: str, country: str) -> list:
         symbol = (q.get("symbol") or "").strip()
         if not symbol:
             continue
-        name = q.get("longname") or q.get("shortname") or symbol
+        name     = q.get("longname") or q.get("shortname") or symbol
         exchange = q.get("exchDisp") or q.get("exchange") or ""
-        q_type = q.get("quoteType", "")
+        q_type   = q.get("quoteType", "")
 
         # Skip mutual funds, indices, currencies unless explicitly searched
         if q_type in ("MUTUALFUND", "INDEX", "CURRENCY"):
@@ -160,9 +203,7 @@ def search_tickers(query: str, country: str) -> list:
         else:
             secondary.append(item)
 
-    results = (priority + secondary)[:10]
-    _set_cache(cache_key, results)
-    return results
+    return priority + secondary
 
 
 # ── Stock data endpoint ────────────────────────────────────────────────────

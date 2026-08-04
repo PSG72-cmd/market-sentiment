@@ -10,6 +10,10 @@ import dynamic from "next/dynamic";
 import { appendHistory } from "./components/HistoryPanel";
 import ShareButton from "./components/ShareButton";
 
+const ThemeToggle = dynamic(() => import("./components/ThemeToggle"), {
+  ssr: false,
+});
+
 // Lazy-load StockExplorer so lightweight-charts only loads on demand
 const StockExplorer = dynamic(() => import("./components/StockExplorer"), {
   ssr: false,
@@ -582,6 +586,7 @@ export default function HomePage() {
         </div>
         <div className="navbar-right">
           <span className="navbar-badge">ML · LR · F1 0.64</span>
+          <ThemeToggle />
           <CountrySelector
             countries={COUNTRIES}
             selected={selectedCountry}
