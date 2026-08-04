@@ -2437,11 +2437,35 @@ textarea::placeholder {
   -webkit-text-stroke: 1px rgba(15, 23, 40, 0.35);
 }
 
-/* ── Light mode: custom cursor — hidden (too dark against light bg) ─── */
-[data-theme="light"] .custom-cursor-glow,
+/* ── Light mode: custom cursor — visible with dark-adapted green glow ── */
+/* mix-blend-mode:screen makes green invisible on white; switch to multiply  */
+/* which darkens on light surfaces and keeps the green trail readable.       */
 [data-theme="light"] .custom-cursor-core,
+[data-theme="light"] div[style*="mixBlendMode"] {
+  mix-blend-mode: multiply !important;
+}
+
+/* Boost glow bloom on light bg — screen blend was handling this in dark */
+[data-theme="light"] .custom-cursor-glow {
+  background: radial-gradient(circle, rgba(5,150,105,0.18) 0%, rgba(5,150,105,0.08) 40%, transparent 70%) !important;
+  filter: blur(14px) !important;
+}
+
+/* Deepen the core dot color for visibility on white */
+[data-theme="light"] .custom-cursor-core {
+  background: radial-gradient(circle, rgba(5,150,105,0.95) 0%, rgba(52,211,153,0.5) 40%, transparent 70%) !important;
+  mix-blend-mode: multiply !important;
+}
+
+/* Darker ring border on light background */
 [data-theme="light"] .custom-cursor-ring {
-  display: none !important;
+  border-color: rgba(5,150,105,0.8) !important;
+}
+
+/* Trail dots: multiply blend + deeper green */
+[data-theme="light"] .custom-cursor-trail-dot {
+  mix-blend-mode: multiply !important;
+  background: rgba(5, 150, 105, 0.85) !important;
 }
 
 /* ── Light mode: glow-border card — reduce glow intensity ───────────── */

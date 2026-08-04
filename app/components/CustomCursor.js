@@ -2,6 +2,11 @@
 
 import { useEffect, useRef } from "react";
 
+// Reads the current theme from the <html> data-theme attribute
+const isLightTheme = () =>
+  typeof document !== "undefined" &&
+  document.documentElement.getAttribute("data-theme") === "light";
+
 /**
  * CustomCursor — green radial glow cursor + comet-tail trail.
  *
@@ -180,6 +185,31 @@ export default function CustomCursor() {
         trailEls.forEach((el) => { if (el) el.style.opacity = "0"; });
       }
 
+      // ── Theme-aware cursor colors ─────────────────────────────────
+      // In light mode: multiply blend keeps green visible on white bg.
+      // In dark mode: screen blend produces the glowing neon effect.
+      const light = isLightTheme();
+      const blendMode = light ? "multiply" : "screen";
+      const coreGrad = light
+        ? "radial-gradient(circle, rgba(5,150,105,0.95) 0%, rgba(5,150,105,0.5) 40%, transparent 70%)"
+        : "radial-gradient(circle, rgba(52,211,153,0.9) 0%, rgba(52,211,153,0.4) 40%, transparent 70%)";
+      const coreGradHover = light
+        ? "radial-gradient(circle, rgba(5,150,105,1) 0%, rgba(5,150,105,0.6) 50%, transparent 80%)"
+        : "radial-gradient(circle, rgba(52,211,153,1) 0%, rgba(52,211,153,0.6) 50%, transparent 80%)";
+      const glowGrad = light
+        ? "radial-gradient(circle, rgba(5,150,105,0.20) 0%, rgba(5,150,105,0.08) 40%, transparent 70%)"
+        : "radial-gradient(circle, rgba(52,211,153,0.13) 0%, rgba(52,211,153,0.05) 40%, transparent 70%)";
+      const trailColor = light ? "rgba(5,150,105,0.9)" : "rgba(52,211,153,0.9)";
+
+      // Apply blend modes to trail dots
+      trailEls.forEach((el) => {
+        if (el) el.style.mixBlendMode = blendMode;
+        if (el) el.style.background   = trailColor;
+      });
+      core.style.mixBlendMode = blendMode;
+      ring.style.mixBlendMode = blendMode;
+      glow.style.background   = glowGrad;
+
       // ── Main cursor glow ─────────────────────────────────────────
       if (s.onInput) {
         glow.style.opacity = "0";
@@ -192,7 +222,7 @@ export default function CustomCursor() {
         core.style.width     = "10px";
         core.style.height    = "10px";
         core.style.transform = `translate(${x - 5}px, ${y - 5}px)`;
-        core.style.background = "radial-gradient(circle, rgba(52,211,153,1) 0%, rgba(52,211,153,0.6) 50%, transparent 80%)";
+        core.style.background = coreGradHover;
       } else {
         glow.style.width     = "320px";
         glow.style.height    = "320px";
@@ -201,7 +231,7 @@ export default function CustomCursor() {
         core.style.width     = "20px";
         core.style.height    = "20px";
         core.style.transform = `translate(${x - 10}px, ${y - 10}px)`;
-        core.style.background = "radial-gradient(circle, rgba(52,211,153,0.9) 0%, rgba(52,211,153,0.4) 40%, transparent 70%)";
+        core.style.background = coreGrad;
       }
 
       rafRef.current = requestAnimationFrame(loop);
@@ -265,7 +295,7 @@ export default function CustomCursor() {
           opacity:       0,
           transition:    "opacity 0.18s, width 0.18s, height 0.18s, background 0.18s",
           willChange:    "transform",
-          mixBlendMode:  "screen",
+          mixBlendMode:  "screen", // overridden to multiply in light mode via JS
         }}
       />
       {/* Click pulse ring */}
@@ -306,7 +336,7 @@ export default function CustomCursor() {
             zIndex:        9996,
             opacity:       0,
             willChange:    "transform, opacity, width, height",
-            mixBlendMode:  "screen",
+            mixBlendMode:  "screen", // overridden to multiply in light mode via JS
           }}
         />
       ))}
