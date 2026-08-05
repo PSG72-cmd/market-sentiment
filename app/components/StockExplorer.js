@@ -714,6 +714,7 @@ export default function StockExplorer() {
   const [suggestions, setSuggestions]     = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError]     = useState(null); // null | "network" | "empty"
   const [highlightIdx, setHighlightIdx]   = useState(-1);
 
   const [selectedStock, setSelectedStock] = useState(null);
@@ -743,6 +744,7 @@ export default function StockExplorer() {
     const q = e.target.value;
     setQuery(q);
     setHighlightIdx(-1);
+    setSearchError(null);
     clearTimeout(debounceRef.current);
 
     if (q.trim().length < 1) {
@@ -755,17 +757,22 @@ export default function StockExplorer() {
     setSearchLoading(true);
     debounceRef.current = setTimeout(async () => {
       try {
+        console.log(`[StockSearch] Searching: q="${q.trim()}" country=${country}`);
         const res  = await fetch(
           `/api/stock?action=search&q=${encodeURIComponent(q.trim())}&country=${country}`
         );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const results = data.results || [];
+        console.log(`[StockSearch] Got ${results.length} results for "${q.trim()}" (${country}):`, results.map(r => r.symbol));
         setSuggestions(results);
-        setShowSuggestions(results.length > 0);
-        if (results.length === 0) setShowSuggestions(true); // Show "no results" state
-      } catch {
+        setSearchError(results.length === 0 ? "empty" : null);
+        setShowSuggestions(true); // Always show dropdown — either results or empty state
+      } catch (err) {
+        console.error(`[StockSearch] Search failed:`, err);
         setSuggestions([]);
-        setShowSuggestions(false);
+        setSearchError("network");
+        setShowSuggestions(true); // Show error state in dropdown
       } finally {
         setSearchLoading(false);
       }
@@ -817,8 +824,11 @@ export default function StockExplorer() {
       setStockData(null);
       setSelectedStock(symbol);
       setShowSuggestions(false);
+      setSearchError(null);
       setQuery("");
       setSuggestions([]);
+
+      console.log(`[StockExplorer] Fetching: ticker=${symbol} country=${country} range=${rk}`);
 
       try {
         const res  = await fetch(
@@ -826,10 +836,24 @@ export default function StockExplorer() {
           { cache: "no-store" }
         );
         const data = await res.json();
-        if (!res.ok || data.error) throw new Error(data.error || `Error ${res.status}`);
+        if (res.status === 404 || data.error) {
+          // Ticker not found — distinguish from network error
+          throw Object.assign(
+            new Error(data.error || `"${symbol}" was not found on this exchange.`),
+            { isNotFound: true }
+          );
+        }
+        if (!res.ok) {
+          throw Object.assign(
+            new Error(`Server error (${res.status}). Please try again.`),
+            { isNetworkError: true }
+          );
+        }
+        console.log(`[StockExplorer] Loaded: ${data.ticker} (${data.name}) @ ${data.price}`);
         setStockData(data);
         setActiveRange(rk);
       } catch (err) {
+        console.error(`[StockExplorer] fetchStock error for ${symbol}:`, err);
         setError(err.message || "Failed to load stock data. Please try again.");
       } finally {
         setLoading(false);
@@ -895,6 +919,8 @@ export default function StockExplorer() {
     setError(null);
     setQuery("");
     setSuggestions([]);
+    setSearchError(null);
+    setShowSuggestions(false);
   }, [country]);
 
   return (
@@ -974,17 +1000,35 @@ export default function StockExplorer() {
                 transition={{ duration: 0.15 }}
                 style={{ transformOrigin: "top" }}
               >
-                {suggestions.length === 0 ? (
-                  <div className="stock-suggestion-empty">
-                    {searchLoading ? "Searching…" : `No results for "${query}"`}
+                {/* Network error state */}
+                {searchError === "network" && (
+                  <div className="stock-suggestion-error">
+                    <span className="stock-suggestion-error-icon">⚡</span>
+                    Search failed — check your connection and try again.
                   </div>
-                ) : (
+                )}
+
+                {/* No results state */}
+                {!searchError && suggestions.length === 0 && (
+                  <div className="stock-suggestion-empty">
+                    {searchLoading
+                      ? "Searching…"
+                      : `No ${countryObj.name} stocks found for "${query}"`
+                    }
+                  </div>
+                )}
+
+                {/* Results list */}
+                {!searchError && suggestions.length > 0 && (
                   suggestions.map((s, i) => (
                     <button
                       key={s.symbol}
                       id={`stock-suggestion-${s.symbol}`}
                       className={`stock-suggestion-item ${i === highlightIdx ? "highlighted" : ""}`}
-                      onMouseDown={() => fetchStock(s.symbol)}
+                      onMouseDown={() => {
+                        console.log(`[StockSearch] Selected: ${s.symbol} (${s.name})`);
+                        fetchStock(s.symbol);
+                      }}
                       onMouseEnter={() => setHighlightIdx(i)}
                     >
                       <span className="stock-suggestion-symbol">{s.symbol}</span>
@@ -1078,12 +1122,30 @@ export default function StockExplorer() {
         {/* Error state */}
         {error && !loading && (
           <motion.div key="error" initial={shouldReduce ? {} : { opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="stock-error-state">
-            <div className="stock-error-icon">⚠️</div>
-            <div className="stock-error-title">Ticker Not Found</div>
+            <div className="stock-error-icon">
+              {error.toLowerCase().includes("server error") || error.toLowerCase().includes("network") || error.toLowerCase().includes("failed to fetch")
+                ? "🌐" : "⚠️"}
+            </div>
+            <div className="stock-error-title">
+              {error.toLowerCase().includes("server error") || error.toLowerCase().includes("failed to fetch")
+                ? "Network Error"
+                : "Stock Not Found"}
+            </div>
             <div className="stock-error-msg">{error}</div>
-            <button className="stock-error-reset" onClick={() => { setSelectedStock(null); setError(null); }}>
-              ← Back to Popular
-            </button>
+            <div className="stock-error-hint">
+              {error.toLowerCase().includes("server error") || error.toLowerCase().includes("failed to fetch")
+                ? "This may be a temporary issue. Please wait a moment and retry."
+                : `Make sure the symbol exists on the ${countryObj.name} exchange (${countryObj.suffix || "no suffix"}).`
+              }
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="stock-error-reset" onClick={() => fetchStock(selectedStock)}>
+                ↺ Retry
+              </button>
+              <button className="stock-error-reset" onClick={() => { setSelectedStock(null); setError(null); }}>
+                ← Back to Popular
+              </button>
+            </div>
           </motion.div>
         )}
 

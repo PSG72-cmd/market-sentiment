@@ -111,16 +111,21 @@ COUNTRY_YAHOO_REGION = {
 
 def search_tickers(query: str, country: str) -> list:
     """
-    Query Yahoo Finance's public search API and return a clean list of
-    {symbol, name, exchange} dicts, prioritising results matching the
-    country's suffix convention.
+    Query Yahoo Finance's public search API and return a STRICTLY FILTERED
+    list of {symbol, name, exchange} dicts matching the selected country's
+    exchange suffix.
 
-    Root-cause fix (Part M): Previously hardcoded lang=en-US&region=US for all
-    countries, causing Yahoo to return US-biased results even when a non-US
-    country was selected. Now uses country-specific region/lang, and appends
-    the exchange suffix as a query hint so Yahoo finds the right exchange.
+    STRICT FILTERING: Only symbols that match the selected country's suffix
+    are returned. Foreign stocks are completely excluded so the UI never
+    shows e.g. AAPL when India is selected.
+
+    Strategy:
+      1. Primary search: augment query with suffix hint (e.g. "reliance .NS")
+         and filter results strictly to suffix-matching symbols.
+      2. If primary yields 0 results, retry with bare query (same strict filter).
+      3. For US (no suffix): only return symbols with no exchange dot-suffix.
     """
-    cache_key = f"search:{query.lower().strip()}:{country}"
+    cache_key = f"search2:{query.lower().strip()}:{country}"
     cached = _get_cached(cache_key, ttl=_SEARCH_TTL)
     if cached is not None:
         return cached
@@ -128,35 +133,37 @@ def search_tickers(query: str, country: str) -> list:
     suffix   = COUNTRY_SUFFIX.get(country, "")
     region, lang = COUNTRY_YAHOO_REGION.get(country, ("US", "en-US"))
 
-    # For non-US countries, augment the query with the exchange suffix hint
-    # e.g. searching "reliance" for IN → "reliance .NS" surfaces NSI-listed results first
+    # Primary: augment query with suffix hint for non-US countries
     augmented_query = query
     if suffix and not query.upper().endswith(suffix.upper()):
         augmented_query = f"{query} {suffix}"
 
-    results = _yahoo_search(augmented_query, suffix, region, lang)
+    results = _yahoo_search_strict(augmented_query, suffix, region, lang)
 
-    # If augmented query returned < 3 priority results, also try bare query
-    priority_count = sum(1 for r in results if suffix and r["symbol"].endswith(suffix))
-    if suffix and priority_count < 2 and augmented_query != query:
-        bare_results = _yahoo_search(query, suffix, region, lang)
-        # Merge: priority from bare, then remainder of augmented
-        seen = {r["symbol"] for r in results}
-        for r in bare_results:
-            if r["symbol"] not in seen:
-                results.append(r)
-                seen.add(r["symbol"])
+    # Fallback: if augmented query yielded nothing, try bare query with same strict filter
+    if not results and augmented_query != query:
+        results = _yahoo_search_strict(query, suffix, region, lang)
+
+    # Second fallback for non-US: try query1 endpoint too
+    if not results and suffix:
+        results = _yahoo_search_strict(augmented_query, suffix, region, lang, host="query1")
 
     results = results[:10]
     _set_cache(cache_key, results)
     return results
 
 
-def _yahoo_search(query: str, suffix: str, region: str, lang: str) -> list:
-    """Inner function: hit Yahoo search API and return prioritised list."""
+def _yahoo_search_strict(query: str, suffix: str, region: str, lang: str,
+                         host: str = "query2") -> list:
+    """
+    Hit Yahoo search API and return ONLY results matching the country suffix.
+    - Non-US (suffix != ""): only symbols ending with that suffix are kept.
+    - US (suffix == ""): only symbols with no dot-exchange suffix are kept.
+    All other results are discarded — no secondary/fallback bleed-through.
+    """
     url = (
-        "https://query2.finance.yahoo.com/v1/finance/search"
-        f"?q={urlquote(query)}&quotesCount=15&newsCount=0"
+        f"https://{host}.finance.yahoo.com/v1/finance/search"
+        f"?q={urlquote(query)}&quotesCount=20&newsCount=0"
         f"&enableFuzzyQuery=true&lang={lang}&region={region}"
     )
     headers = {
@@ -176,9 +183,8 @@ def _yahoo_search(query: str, suffix: str, region: str, lang: str) -> list:
     except Exception:
         return []
 
-    quotes   = data.get("quotes", [])
-    priority = []
-    secondary = []
+    quotes  = data.get("quotes", [])
+    matched = []
 
     for q in quotes:
         symbol = (q.get("symbol") or "").strip()
@@ -188,22 +194,25 @@ def _yahoo_search(query: str, suffix: str, region: str, lang: str) -> list:
         exchange = q.get("exchDisp") or q.get("exchange") or ""
         q_type   = q.get("quoteType", "")
 
-        # Skip mutual funds, indices, currencies unless explicitly searched
+        # Skip mutual funds, indices, currencies
         if q_type in ("MUTUALFUND", "INDEX", "CURRENCY"):
             continue
 
-        item = {"symbol": symbol, "name": name, "exchange": exchange}
-
-        # Priority: matches the selected country's suffix
-        if suffix and symbol.endswith(suffix):
-            priority.append(item)
-        elif not suffix and "." not in symbol:
-            # US stocks (no suffix) → priority when US selected
-            priority.append(item)
+        # ── STRICT FILTER ────────────────────────────────────────────────
+        # Only keep symbols that match the selected country's suffix.
+        if suffix:
+            # Non-US: symbol must end with the country suffix (e.g. ".NS")
+            if not symbol.endswith(suffix):
+                continue
         else:
-            secondary.append(item)
+            # US: symbol must NOT contain any exchange dot-suffix
+            if "." in symbol:
+                continue
+        # ─────────────────────────────────────────────────────────────────
 
-    return priority + secondary
+        matched.append({"symbol": symbol, "name": name, "exchange": exchange})
+
+    return matched
 
 
 # ── Stock data endpoint ────────────────────────────────────────────────────
